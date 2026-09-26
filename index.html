@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPS Jamming Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dfe3ea;
+  --accent: #2458d6;
+  --normal: #2e7d32; --blockage: #b58900; --interference: #ef6c00; --jamming: #d32f2f;
+  --nosignal: #555b66; --unusual: #7b1fa2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --panel: #1b1f27; --text: #e7eaf0; --muted: #9aa3b2; --line: #2c323d;
+    --accent: #7aa2ff;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --panel: #1b1f27; --text: #e7eaf0; --muted: #9aa3b2; --line: #2c323d; --accent: #7aa2ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+.app { display: grid; grid-template-columns: 360px 1fr; grid-template-rows: 1fr 170px; height: 100vh; }
+aside { grid-row: 1 / 3; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 16px; }
+#map { grid-column: 2; grid-row: 1; }
+.chart-wrap { grid-column: 2; grid-row: 2; background: var(--panel); border-top: 1px solid var(--line); position: relative; }
+#chart { width: 100%; height: 100%; display: block; cursor: crosshair; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; }
+p { margin: 0 0 8px; }
+.muted { color: var(--muted); }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center; margin-top: 12px; }
+.drop.over { border-color: var(--accent); }
+button, .btn { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+button.primary, .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.legend div { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex: none; border: 1px solid rgba(0,0,0,.25); }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { background: var(--bg); border-radius: 8px; padding: 8px 10px; }
+.stat b { display: block; font-size: 18px; }
+.events { list-style: none; padding: 0; margin: 0; }
+.events li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+.events li:hover { border-color: var(--accent); }
+label.slider { display: block; margin: 6px 0; }
+label.slider input { width: 100%; }
+select { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px; }
+details summary { cursor: pointer; color: var(--muted); }
+.leaflet-popup-content { font: 13px/1.4 system-ui, sans-serif; }
+.leaflet-popup-content table { border-collapse: collapse; }
+.leaflet-popup-content td { padding: 1px 6px 1px 0; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; white-space: nowrap; }
+@media (max-width: 800px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 60vh 150px auto; height: auto; }
+  aside { grid-row: 3; border-right: 0; }
+  #map { grid-column: 1; grid-row: 1; }
+  .chart-wrap { grid-column: 1; grid-row: 2; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>GPS Jamming Map</h1>
+    <p class="muted">Open a CSV from the GPS Jam Logger app. Nothing is uploaded; the file stays in your browser.</p>
+
+    <div class="drop" id="drop">
+      <p>Drop CSV log files here</p>
+      <div class="row" style="justify-content:center">
+        <label class="btn primary">Open log file…<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label>
+        <button id="demo">Try demo data</button>
+      </div>
+    </div>
+    <p id="loaded" class="muted" style="margin-top:8px"></p>
+    <p><a href="GpsJamLogger.apk" style="color:var(--accent)">Get the Android logger app (APK)</a></p>
+
+    <h2>Colour points by</h2>
+    <select id="colorMode">
+      <option value="status">Verdict (jamming / blockage…)</option>
+      <option value="cn0">Signal strength (top-4 C/N0)</option>
+    </select>
+
+    <div class="legend" id="legend"></div>
+
+    <h2>Summary</h2>
+    <div class="stats" id="stats"><div class="stat muted">No data yet</div></div>
+
+    <h2>Suspected jamming spots</h2>
+    <ul class="events" id="events"><li class="muted" style="cursor:default">None yet</li></ul>
+    <div class="row"><button id="exportEvents" disabled>Download spots as CSV</button></div>
+
+    <h2>Sensitivity</h2>
+    <label class="slider">Normal signal level (baseline): <b id="baseV"></b>
+      <input type="range" id="base" min="0" max="55" step="0.5" value="0"></label>
+    <label class="slider">C/N0 drop that counts as degraded: <b id="dropWarnV"></b> dB
+      <input type="range" id="dropWarn" min="2" max="15" step="0.5" value="6"></label>
+    <label class="slider">C/N0 drop that counts as severe: <b id="dropJamV"></b> dB
+      <input type="range" id="dropJam" min="4" max="25" step="0.5" value="10"></label>
+    <label class="slider">AGC drop that means extra RF noise: <b id="agcWarnV"></b> dB
+      <input type="range" id="agcWarn" min="0.5" max="10" step="0.5" value="2"></label>
+    <label class="slider">AGC drop for jamming: <b id="agcJamV"></b> dB
+      <input type="range" id="agcJam" min="1" max="15" step="0.5" value="3"></label>
+    <div class="row"><button id="reset">Reset</button></div>
+
+    <h2>How it decides</h2>
+    <details>
+      <summary>Read the rules</summary>
+      <p style="margin-top:8px">For each second the page takes the average C/N0 of the 4 strongest satellites and compares it with the normal level for your log (the 75th percentile, or the slider value).</p>
+      <p><b>Jamming</b>: severe C/N0 drop and the AGC fell too (the receiver turned its gain down because extra radio power arrived), or no satellites at all while AGC fell.</p>
+      <p><b>Interference</b>: degraded C/N0 with an AGC drop, or, on phones without AGC, even the high-elevation satellites are badly weakened.</p>
+      <p><b>Blockage</b>: C/N0 dropped but the AGC stayed put. Trees, roofs, buildings, tunnels.</p>
+      <p><b>No signal</b>: no satellites and no AGC evidence either way.</p>
+      <p><b>Unusual</b>: 6+ satellites all very strong and nearly identical (a spoofing hint, not proof).</p>
+      <p>Seconds without a GPS position get the phone's Wi-Fi/cell position, or are placed along the route between the known positions before and after (hollow markers).</p>
+    </details>
+  </aside>
+  <div id="map"></div>
+  <div class="chart-wrap"><canvas id="chart"></canvas><div class="tip" id="tip"></div></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STATUS = ["NORMAL", "BLOCKAGE", "INTERFERENCE", "JAMMING", "NO_SIGNAL", "UNUSUAL"];
+  var LABEL = { NORMAL: "Normal", BLOCKAGE: "Blockage (something in the way)", INTERFERENCE: "Interference",
+    JAMMING: "Jamming likely", NO_SIGNAL: "No satellites", UNUSUAL: "Unusual (spoofing hint)" };
+  var DEFAULTS = { base: 0, dropWarn: 6, dropJam: 10, agcWarn: 2, agcJam: 3 };
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function statusColor(s) {
+    return css({ NORMAL: "--normal", BLOCKAGE: "--blockage", INTERFERENCE: "--interference", JAMMING: "--jamming",
+      NO_SIGNAL: "--nosignal", UNUSUAL: "--unusual" }[s] || "--nosignal");
+  }
+  // Red (weak) -> yellow -> green (strong) for C/N0 mode.
+  function cn0Color(v) {
+    if (v == null || isNaN(v)) return css("--nosignal");
+    var t = Math.max(0, Math.min(1, (v - 20) / 25));
+    var hue = t * 120;
+    return "hsl(" + hue.toFixed(0) + ",75%,45%)";
+  }
+
+  // ---------------------------------------------------------------- state
+  var epochs = [];       // sorted by time
+  var files = [];
+  var map = L.map("map", { preferCanvas: true }).setView([20, 0], 2);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+  var trackLayer = L.layerGroup().addTo(map);
+  var pointLayer = L.layerGroup().addTo(map);
+  var eventLayer = L.layerGroup().addTo(map);
+  var highlight = null;
+  var events = [];
+
+  // ---------------------------------------------------------------- CSV parsing
+  function parseCsv(text) {
+    var lines = text.split(/\r?\n/);
+    var header = lines[0].split(",").map(function (h) { return h.trim(); });
+    var idx = {};
+    header.forEach(function (h, i) { idx[h] = i; });
+    if (idx.utc_ms == null || idx.cn0_dbhz == null) throw new Error("This doesn't look like a GPS Jam Logger file (missing utc_ms / cn0_dbhz columns).");
+    var byTime = new Map();
+    for (var i = 1; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line) continue;
+      var c = line.split(",");
+      var t = +c[idx.utc_ms];
+      if (!t) continue;
+      var e = byTime.get(t);
+      if (!e) {
+        var lat = parseFloat(c[idx.lat]), lon = parseFloat(c[idx.lon]);
+        e = {
+          t: t, lat: isNaN(lat) ? null : lat, lon: isNaN(lon) ? null : lon,
+          acc: parseFloat(c[idx.acc_m]), src: c[idx.loc_source] || "",
+          sats: [], agcBy: {}, appStatus: c[idx.epoch_status] || ""
+        };
+        byTime.set(t, e);
+      }
+      var cn0 = parseFloat(c[idx.cn0_dbhz]);
+      var agc = parseFloat(c[idx.agc_db]);
+      var band = c[idx.band] || "L1";
+      if (c[idx.constellation]) {
+        e.sats.push({ cons: c[idx.constellation], svid: c[idx.svid], band: band, cn0: isNaN(cn0) ? 0 : cn0,
+          elev: parseFloat(c[idx.elev_deg]), used: c[idx.used_in_fix] === "1" });
+      }
+      if (!isNaN(agc) && band === "L1") e.agcBy[c[idx.constellation] || "*"] = agc;
+    }
+    var out = Array.from(byTime.values());
+    out.forEach(function (e) {
+      // Constellations sit at different AGC levels, so use one steady reference (GPS L1 first).
+      var ref = ["GPS", "GALILEO", "GLONASS", "BEIDOU", "*"].filter(function (k) { return e.agcBy[k] != null; })[0];
+      e.agc = ref ? e.agcBy[ref] : NaN;
+      delete e.agcBy;
+      var cn = e.sats.filter(function (s) { return s.cn0 > 0; }).map(function (s) { return s.cn0; })
+        .sort(function (a, b) { return b - a; });
+      e.nSats = cn.length;
+      e.cn0s = cn;
+      e.top4 = cn.length ? mean(cn.slice(0, 4)) : NaN;
+    });
+    return out;
+  }
+
+  function mean(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return s / a.length; }
+  function percentile(a, p) {
+    if (!a.length) return NaN;
+    var s = a.slice().sort(function (x, y) { return x - y; });
+    return s[Math.max(0, Math.min(s.length - 1, Math.round(p * (s.length - 1))))];
+  }
+  function std(a) {
+    if (a.length < 2) return 0;
+    var m = mean(a), ss = 0;
+    a.forEach(function (x) { ss += (x - m) * (x - m); });
+    return Math.sqrt(ss / (a.length - 1));
+  }
+
+  // Fill in positions for seconds with no fix by interpolating between neighbours in time.
+  function fillPositions(list) {
+    var known = [];
+    list.forEach(function (e, i) { e.est = false; if (e.lat != null) known.push(i); });
+    for (var k = 0; k < known.length - 1; k++) {
+      var a = list[known[k]], b = list[known[k + 1]];
+      if (known[k + 1] - known[k] < 2 || b.t - a.t > 10 * 60 * 1000) continue;
+      for (var j = known[k] + 1; j < known[k + 1]; j++) {
+        var f = (list[j].t - a.t) / (b.t - a.t);
+        list[j].lat = a.lat + (b.lat - a.lat) * f;
+        list[j].lon = a.lon + (b.lon - a.lon) * f;
+        list[j].est = true;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- classification (same rules as the app)
+  function settings() {
+    var o = {};
+    Object.keys(DEFAULTS).forEach(function (k) { o[k] = parseFloat(document.getElementById(k).value); });
+    return o;
+  }
+
+  function classify() {
+    var s = settings();
+    var tops = epochs.filter(function (e) { return !isNaN(e.top4); }).map(function (e) { return e.top4; });
+    var agcs = epochs.filter(function (e) { return !isNaN(e.agc); }).map(function (e) { return e.agc; });
+    var base = s.base > 0 ? s.base : Math.max(35, percentile(tops, 0.75) || 42);
+    var agcBase = percentile(agcs, 0.75);
+    document.getElementById("baseV").textContent = base.toFixed(1) + " dB-Hz" + (s.base > 0 ? "" : " (auto)");
+    ["dropWarn", "dropJam", "agcWarn", "agcJam"].forEach(function (k) {
+      document.getElementById(k + "V").textContent = s[k];
+    });
+
+    epochs.forEach(function (e) {
+      var drop = isNaN(e.top4) ? 99 : base - e.top4;
+      var agcDrop = (!isNaN(e.agc) && !isNaN(agcBase)) ? agcBase - e.agc : NaN;
+      var agcKnown = !isNaN(agcDrop);
+      var st = "NORMAL", why = "Signals look healthy";
+      if (e.nSats === 0) {
+        if (agcKnown && agcDrop >= s.agcWarn) { st = "JAMMING"; why = "No satellites and AGC fell " + agcDrop.toFixed(1) + " dB"; }
+        else { st = "NO_SIGNAL"; why = agcKnown ? "No satellites, AGC normal (indoors or tunnel?)" : "No satellites heard"; }
+      } else if (drop >= s.dropWarn) {
+        if (agcKnown) {
+          if (drop >= s.dropJam && agcDrop >= s.agcJam) st = "JAMMING";
+          else if (agcDrop >= s.agcWarn) st = "INTERFERENCE";
+          else st = "BLOCKAGE";
+          why = "C/N0 down " + drop.toFixed(1) + " dB, AGC down " + agcDrop.toFixed(1) + " dB";
+        } else {
+          var high = e.sats.filter(function (x) { return x.cn0 > 0 && x.elev >= 40; }).map(function (x) { return x.cn0; });
+          var highWeak = high.length >= 2 && (base - mean(high)) >= s.dropJam;
+          if (highWeak && drop >= s.dropJam) { st = "INTERFERENCE"; why = "Every satellite weak, even high ones (no AGC to confirm)"; }
+          else { st = "BLOCKAGE"; why = "C/N0 down " + drop.toFixed(1) + " dB (no AGC in this log)"; }
+        }
+      } else if (e.nSats >= 6 && e.top4 >= 48 && std(e.cn0s) < 1.5) {
+        st = "UNUSUAL"; why = "Very strong and very uniform signals (spoofing check)";
+      }
+      e.status = st; e.why = why; e.drop = drop; e.agcDrop = agcDrop;
+    });
+    return { base: base, agcBase: agcBase, hasAgc: agcs.length > 0 };
+  }
+
+  // Group consecutive JAMMING/INTERFERENCE seconds (gaps under 30 s) into "spots".
+  function findEvents() {
+    var out = [], cur = null;
+    epochs.forEach(function (e) {
+      var bad = e.status === "JAMMING" || e.status === "INTERFERENCE";
+      if (bad) {
+        if (cur && e.t - cur.end <= 30000) { cur.end = e.t; cur.items.push(e); }
+        else { cur = { start: e.t, end: e.t, items: [e] }; out.push(cur); }
+      }
+    });
+    out.forEach(function (ev) {
+      var located = ev.items.filter(function (e) { return e.lat != null; });
+      ev.jam = ev.items.filter(function (e) { return e.status === "JAMMING"; }).length;
+      ev.minTop4 = Math.min.apply(null, ev.items.map(function (e) { return isNaN(e.top4) ? 0 : e.top4; }));
+      var ad = ev.items.map(function (e) { return e.agcDrop; }).filter(function (x) { return !isNaN(x); });
+      ev.maxAgcDrop = ad.length ? Math.max.apply(null, ad) : NaN;
+      if (located.length) {
+        // Centre on the worst second, which is usually closest to the source.
+        var worst = located.slice().sort(function (a, b) { return (a.top4 || 0) - (b.top4 || 0); })[0];
+        ev.lat = worst.lat; ev.lon = worst.lon;
+        ev.bounds = L.latLngBounds(located.map(function (e) { return [e.lat, e.lon]; }));
+      }
+    });
+    out.sort(function (a, b) { return (b.jam * 3 + b.items.length) - (a.jam * 3 + a.items.length); });
+    return out;
+  }
+
+  // ---------------------------------------------------------------- rendering
+  function fmtTime(t) { return new Date(t).toLocaleString(); }
+  function fmtDur(ms) { var s = Math.round(ms / 1000) + 1; return s < 90 ? s + " s" : Math.round(s / 60) + " min"; }
+  function n1(v) { return v == null || isNaN(v) ? "–" : v.toFixed(1); }
+
+  function popupHtml(e) {
+    var cons = {};
+    e.sats.forEach(function (s) {
+      if (!cons[s.cons]) cons[s.cons] = [];
+      if (s.cn0 > 0) cons[s.cons].push(s.cn0);
+    });
+    var rows = Object.keys(cons).sort().map(function (k) {
+      var a = cons[k];
+      return "<tr><td>" + k + "</td><td>" + a.length + " sats</td><td>" + (a.length ? mean(a).toFixed(1) + " dB-Hz" : "–") + "</td></tr>";
+    }).join("");
+    return "<b style='color:" + statusColor(e.status) + "'>" + LABEL[e.status] + "</b><br>" + e.why +
+      "<br><span style='opacity:.7'>" + fmtTime(e.t) + "</span>" +
+      "<table style='margin-top:6px'>" +
+      "<tr><td>Top-4 C/N0</td><td colspan=2>" + n1(e.top4) + " dB-Hz</td></tr>" +
+      "<tr><td>AGC</td><td colspan=2>" + n1(e.agc) + (isNaN(e.agc) ? "" : " dB") + "</td></tr>" +
+      "<tr><td>Satellites</td><td colspan=2>" + e.nSats + "</td></tr>" +
+      "<tr><td>Position</td><td colspan=2>" + (e.est ? "estimated (between fixes)" : (e.src || "–")) +
+      (e.acc && !e.est ? ", ±" + Math.round(e.acc) + " m" : "") + "</td></tr>" + rows + "</table>";
+  }
+
+  function render() {
+    var info = classify();
+    events = findEvents();
+    var mode = document.getElementById("colorMode").value;
+
+    trackLayer.clearLayers(); pointLayer.clearLayers(); eventLayer.clearLayers();
+    var located = epochs.filter(function (e) { return e.lat != null; });
+    if (located.length > 1) {
+      L.polyline(located.map(function (e) { return [e.lat, e.lon]; }), { color: css("--muted"), weight: 2, opacity: .5 }).addTo(trackLayer);
+    }
+    // Draw calm points first so problem points sit on top.
+    var order = { NORMAL: 0, UNUSUAL: 1, BLOCKAGE: 2, NO_SIGNAL: 3, INTERFERENCE: 4, JAMMING: 5 };
+    located.slice().sort(function (a, b) { return order[a.status] - order[b.status]; }).forEach(function (e) {
+      var col = mode === "status" ? statusColor(e.status) : cn0Color(e.top4);
+      var bad = e.status === "JAMMING" || e.status === "INTERFERENCE";
+      L.circleMarker([e.lat, e.lon], {
+        radius: bad ? 7 : 5, color: col, weight: e.est ? 2 : 1,
+        fillColor: col, fillOpacity: e.est ? 0.1 : 0.85
+      }).bindPopup(function () { return popupHtml(e); }).addTo(pointLayer);
+    });
+    events.forEach(function (ev, i) {
+      if (ev.lat == null) return;
+      L.circle([ev.lat, ev.lon], { radius: 150, color: statusColor(ev.jam ? "JAMMING" : "INTERFERENCE"), weight: 2, fill: false, dashArray: "4 4" })
+        .bindTooltip("Spot " + (i + 1)).addTo(eventLayer);
+    });
+
+    renderLegend(mode);
+    renderStats(info, located.length);
+    renderEvents();
+    drawChart();
+  }
+
+  function renderLegend(mode) {
+    var el = document.getElementById("legend");
+    if (mode === "status") {
+      el.innerHTML = STATUS.map(function (s) {
+        return "<div><span class='dot' style='background:" + statusColor(s) + "'></span>" + LABEL[s] + "</div>";
+      }).join("") + "<div><span class='dot' style='background:transparent;border:2px solid var(--muted)'></span>Hollow: position estimated</div>";
+    } else {
+      el.innerHTML = [45, 40, 35, 30, 25, 20].map(function (v) {
+        return "<div><span class='dot' style='background:" + cn0Color(v) + "'></span>" + (v === 20 ? "≤ 20" : v) + " dB-Hz</div>";
+      }).join("");
+    }
+  }
+
+  function renderStats(info, locatedCount) {
+    var el = document.getElementById("stats");
+    if (!epochs.length) { el.innerHTML = "<div class='stat muted'>No data yet</div>"; return; }
+    var counts = {};
+    STATUS.forEach(function (s) { counts[s] = 0; });
+    epochs.forEach(function (e) { counts[e.status]++; });
+    var dur = (epochs[epochs.length - 1].t - epochs[0].t) / 60000;
+    function pct(s) { return (100 * counts[s] / epochs.length).toFixed(1) + "%"; }
+    el.innerHTML =
+      "<div class='stat'><b>" + dur.toFixed(0) + " min</b>logged (" + epochs.length + " s)</div>" +
+      "<div class='stat'><b>" + info.base.toFixed(1) + "</b>normal C/N0, dB-Hz</div>" +
+      "<div class='stat' style='color:" + statusColor("JAMMING") + "'><b>" + pct("JAMMING") + "</b>jamming likely</div>" +
+      "<div class='stat' style='color:" + statusColor("INTERFERENCE") + "'><b>" + pct("INTERFERENCE") + "</b>interference</div>" +
+      "<div class='stat'><b>" + pct("BLOCKAGE") + "</b>blockage</div>" +
+      "<div class='stat'><b>" + (info.hasAgc ? "Yes" : "No") + "</b>AGC in log" + (info.hasAgc ? "" : " (less certain)") + "</div>";
+    document.getElementById("loaded").textContent = files.join(", ") + " · " + locatedCount + " seconds with a position";
+  }
+
+  function renderEvents() {
+    var el = document.getElementById("events");
+    document.getElementById("exportEvents").disabled = !events.length;
+    if (!events.length) {
+      el.innerHTML = "<li class='muted' style='cursor:default'>" + (epochs.length ? "No jamming or interference found. " : "") + "None yet</li>";
+      return;
+    }
+    el.innerHTML = "";
+    events.slice(0, 30).forEach(function (ev, i) {
+      var li = document.createElement("li");
+      var kind = ev.jam ? "Jamming likely" : "Interference";
+      li.innerHTML = "<b style='color:" + statusColor(ev.jam ? "JAMMING" : "INTERFERENCE") + "'>Spot " + (i + 1) + ": " + kind + "</b><br>" +
+        fmtTime(ev.start) + " · " + fmtDur(ev.end - ev.start) + "<br>" +
+        "<span class='muted'>lowest C/N0 " + n1(ev.minTop4) + " dB-Hz" + (isNaN(ev.maxAgcDrop) ? "" : ", AGC down " + n1(ev.maxAgcDrop) + " dB") +
+        (ev.lat == null ? ", no position" : "") + "</span>";
+      li.onclick = function () {
+        if (ev.bounds) map.fitBounds(ev.bounds.pad(0.5), { maxZoom: 17 });
+        setHighlight(ev.items[0]);
+      };
+      el.appendChild(li);
+    });
+  }
+
+  function exportEvents() {
+    var lines = ["spot,kind,start,duration_s,lat,lon,lowest_top4_cn0,max_agc_drop_db,seconds_jamming,seconds_total"];
+    events.forEach(function (ev, i) {
+      lines.push([i + 1, ev.jam ? "jamming" : "interference", new Date(ev.start).toISOString(),
+        Math.round((ev.end - ev.start) / 1000) + 1, ev.lat != null ? ev.lat.toFixed(6) : "", ev.lon != null ? ev.lon.toFixed(6) : "",
+        n1(ev.minTop4), isNaN(ev.maxAgcDrop) ? "" : ev.maxAgcDrop.toFixed(1), ev.jam, ev.items.length].join(","));
+    });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+    a.download = "jamming-spots.csv";
+    a.click();
+  }
+
+  // ---------------------------------------------------------------- timeline chart
+  var canvas = document.getElementById("chart"), tip = document.getElementById("tip");
+  var chartGeom = null;
+
+  function drawChart() {
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr; canvas.height = h * dpr;
+    var g = canvas.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.font = "11px system-ui, sans-serif";
+    if (!epochs.length) {
+      g.fillStyle = css("--muted");
+      g.fillText("Signal strength over time appears here once a log is loaded.", 16, 24);
+      chartGeom = null;
+      return;
+    }
+    var L0 = 44, R = 44, T = 18, B = 26;
+    var t0 = epochs[0].t, t1 = epochs[epochs.length - 1].t || t0 + 1;
+    var pw = w - L0 - R, ph = h - T - B;
+    var cMin = 10, cMax = 55;
+    var agcVals = epochs.map(function (e) { return e.agc; }).filter(function (x) { return !isNaN(x); });
+    var aMin = agcVals.length ? Math.min.apply(null, agcVals) - 1 : 0, aMax = agcVals.length ? Math.max.apply(null, agcVals) + 1 : 1;
+    function X(t) { return L0 + (t1 === t0 ? 0 : (t - t0) / (t1 - t0) * pw); }
+    function Yc(v) { return T + ph - (v - cMin) / (cMax - cMin) * ph; }
+    function Ya(v) { return T + ph - (v - aMin) / (aMax - aMin) * ph; }
+
+    // Status band along the bottom.
+    epochs.forEach(function (e, i) {
+      var next = epochs[i + 1];
+      var x0 = X(e.t), x1 = next && next.t - e.t < 5000 ? X(next.t) : x0 + 1;
+      g.fillStyle = statusColor(e.status);
+      g.fillRect(x0, T + ph + 4, Math.max(1, x1 - x0), 6);
+    });
+    // Grid + axis labels.
+    g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.lineWidth = 1;
+    [20, 30, 40, 50].forEach(function (v) {
+      g.beginPath(); g.moveTo(L0, Yc(v)); g.lineTo(L0 + pw, Yc(v)); g.stroke();
+      g.fillText(v, 8, Yc(v) + 4);
+    });
+    g.fillText("C/N0", 8, 12);
+    if (agcVals.length) { g.textAlign = "right"; g.fillText("AGC dB", w - 6, 12); g.fillText(aMax.toFixed(0), w - 6, T + 8); g.fillText(aMin.toFixed(0), w - 6, T + ph); g.textAlign = "left"; }
+    g.fillText(new Date(t0).toLocaleTimeString(), L0, h - 6);
+    g.textAlign = "right"; g.fillText(new Date(t1).toLocaleTimeString(), L0 + pw, h - 6); g.textAlign = "left";
+
+    function line(get, Y, color, width) {
+      g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+      var pen = false, lastT = 0;
+      epochs.forEach(function (e) {
+        var v = get(e);
+        if (isNaN(v) || e.t - lastT > 5000) pen = false;
+        if (!isNaN(v)) { if (pen) g.lineTo(X(e.t), Y(v)); else g.moveTo(X(e.t), Y(v)); pen = true; lastT = e.t; }
+      });
+      g.stroke();
+    }
+    line(function (e) { return e.top4; }, Yc, css("--accent"), 1.5);
+    if (agcVals.length) line(function (e) { return e.agc; }, Ya, css("--interference"), 1.2);
+
+    if (highlight) {
+      g.strokeStyle = css("--text"); g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(X(highlight.t), T); g.lineTo(X(highlight.t), T + ph); g.stroke(); g.setLineDash([]);
+    }
+    // Key
+    g.fillStyle = css("--accent"); g.fillRect(L0 + 4, 5, 12, 3); g.fillStyle = css("--muted"); g.fillText("top-4 C/N0", L0 + 20, 11);
+    if (agcVals.length) { g.fillStyle = css("--interference"); g.fillRect(L0 + 100, 5, 12, 3); g.fillStyle = css("--muted"); g.fillText("AGC", L0 + 116, 11); }
+    chartGeom = { L0: L0, pw: pw, t0: t0, t1: t1 };
+  }
+
+  function epochAtX(x) {
+    if (!chartGeom) return null;
+    var t = chartGeom.t0 + (x - chartGeom.L0) / chartGeom.pw * (chartGeom.t1 - chartGeom.t0);
+    var lo = 0, hi = epochs.length - 1;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (epochs[mid].t < t) lo = mid; else hi = mid; }
+    return Math.abs(epochs[lo].t - t) < Math.abs(epochs[hi].t - t) ? epochs[lo] : epochs[hi];
+  }
+
+  var hlMarker = null;
+  function setHighlight(e) {
+    highlight = e;
+    if (hlMarker) { map.removeLayer(hlMarker); hlMarker = null; }
+    if (e && e.lat != null) {
+      hlMarker = L.circleMarker([e.lat, e.lon], { radius: 11, color: css("--text"), weight: 2, fill: false }).addTo(map);
+    }
+    drawChart();
+  }
+
+  canvas.addEventListener("mousemove", function (ev) {
+    var e = epochAtX(ev.offsetX);
+    if (!e) return;
+    tip.style.display = "block";
+    tip.style.left = Math.min(ev.offsetX + 12, canvas.clientWidth - 220) + "px";
+    tip.style.top = "22px";
+    tip.textContent = new Date(e.t).toLocaleTimeString() + " · " + LABEL[e.status] + " · C/N0 " + n1(e.top4) + (isNaN(e.agc) ? "" : " · AGC " + n1(e.agc));
+  });
+  canvas.addEventListener("mouseleave", function () { tip.style.display = "none"; });
+  canvas.addEventListener("click", function (ev) {
+    var e = epochAtX(ev.offsetX);
+    if (!e) return;
+    setHighlight(e);
+    if (e.lat != null) map.panTo([e.lat, e.lon]);
+  });
+  window.addEventListener("resize", drawChart);
+
+  // ---------------------------------------------------------------- loading
+  function loadTexts(list) {
+    try {
+      var all = [];
+      list.forEach(function (item) { all = all.concat(parseCsv(item.text)); });
+      all.sort(function (a, b) { return a.t - b.t; });
+      epochs = all;
+      files = list.map(function (x) { return x.name; });
+      fillPositions(epochs);
+      highlight = null;
+      render();
+      var pts = epochs.filter(function (e) { return e.lat != null; }).map(function (e) { return [e.lat, e.lon]; });
+      if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.1));
+      else alert("The log has no positions yet, so only the timeline can be shown.");
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  function readFiles(fileList) {
+    var arr = Array.from(fileList);
+    Promise.all(arr.map(function (f) {
+      return f.text().then(function (t) { return { name: f.name, text: t }; });
+    })).then(loadTexts);
+  }
+
+  document.getElementById("file").addEventListener("change", function (e) { readFiles(e.target.files); });
+  var drop = document.getElementById("drop");
+  ["dragenter", "dragover"].forEach(function (n) {
+    drop.addEventListener(n, function (e) { e.preventDefault(); drop.classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (n) {
+    drop.addEventListener(n, function (e) { e.preventDefault(); drop.classList.remove("over"); });
+  });
+  drop.addEventListener("drop", function (e) { readFiles(e.dataTransfer.files); });
+  document.getElementById("demo").addEventListener("click", function () {
+    loadTexts([{ name: "demo drive (made-up data)", text: demoCsv() }]);
+  });
+  document.getElementById("colorMode").addEventListener("change", render);
+  Object.keys(DEFAULTS).forEach(function (k) {
+    document.getElementById(k).addEventListener("input", function () { if (epochs.length) render(); else classify(); });
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    Object.keys(DEFAULTS).forEach(function (k) { document.getElementById(k).value = DEFAULTS[k]; });
+    if (epochs.length) render(); else classify();
+  });
+  document.getElementById("exportEvents").addEventListener("click", exportEvents);
+
+  // ---------------------------------------------------------------- demo data
+  // A made-up 20-minute drive: open road, a tree-lined stretch (blockage),
+  // then a spot with a jammer (every satellite drops, AGC falls, fix is lost).
+  function demoCsv() {
+    var rnd = mulberry(7);
+    var header = "utc_ms,local_time,lat,lon,alt_m,acc_m,speed_mps,loc_source,loc_age_s,constellation,svid,band,freq_mhz,cn0_dbhz,agc_db,elev_deg,azim_deg,used_in_fix,epoch_sats,epoch_top4_cn0,epoch_status";
+    var lines = [header];
+    var sats = [];
+    ["GPS", "GALILEO", "GLONASS", "BEIDOU"].forEach(function (c, ci) {
+      for (var k = 0; k < 6; k++) sats.push({ cons: c, svid: 3 + k * 4 + ci, elev: 10 + rnd() * 75, az: rnd() * 360, strong: 30 + rnd() * 17 });
+    });
+    var start = Date.UTC(2026, 8, 20, 9, 0, 0);
+    var lat0 = 51.5007, lon0 = -0.1246, jamLat = 51.5105, jamLon = -0.0870;
+    for (var s = 0; s < 1200; s++) {
+      var t = start + s * 1000;
+      var f = s / 1200;
+      var lat = lat0 + f * 0.02 + Math.sin(f * 9) * 0.002, lon = lon0 + f * 0.06;
+      var blockage = s > 300 && s < 420;
+      var dJam = Math.hypot((lat - jamLat) * 111000, (lon - jamLon) * 69000);
+      var jamDb = dJam < 1200 ? Math.max(0, 28 - 20 * Math.log10(Math.max(dJam, 60) / 60)) : 0; // stronger when closer
+      var agc = 2.0 + (rnd() - 0.5) * 0.4 - jamDb * 0.45;
+      var rows = [];
+      sats.forEach(function (sat) {
+        var cn0 = sat.strong + (sat.elev - 45) * 0.08 + (rnd() - 0.5) * 2;
+        if (blockage && sat.elev < 78) cn0 -= 10 + rnd() * 10;
+        cn0 -= jamDb;
+        if (cn0 < 16) return;
+        rows.push(sat.cons + "," + sat.svid + ",L1,1575.420," + cn0.toFixed(1) + "," + agc.toFixed(2) + "," + sat.elev.toFixed(1) + "," + sat.az.toFixed(1) + "," + (cn0 > 25 ? 1 : 0));
+      });
+      var hasFix = rows.length >= 5;
+      var net = !hasFix && s % 20 === 0;
+      var pos = hasFix ? (lat + (rnd() - 0.5) * 0.00005).toFixed(7) + "," + (lon + (rnd() - 0.5) * 0.00005).toFixed(7) + ",20.0,4.0,11.00,gps,0.3"
+        : net ? (lat + 0.0012).toFixed(7) + "," + (lon - 0.001).toFixed(7) + ",0,150.0,0.00,network,1.0" : ",,,,,,";
+      var pre = t + "," + new Date(t).toISOString() + "," + pos + ",";
+      if (!rows.length) lines.push(pre + ",,,,," + agc.toFixed(2) + ",,,,0,,");
+      else rows.forEach(function (r) { lines.push(pre + r + "," + rows.length + ",,"); });
+    }
+    return lines.join("\n");
+  }
+  function mulberry(a) {
+    return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  }
+
+  classify();
+  renderLegend("status");
+  drawChart();
+})();
+</script>
+</body>
+</html>
