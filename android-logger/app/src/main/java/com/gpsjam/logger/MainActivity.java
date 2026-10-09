@@ -98,6 +98,20 @@ public class MainActivity extends Activity {
         });
         col.addView(share, fullWidth(dp(8)));
 
+        Button readings = new Button(this);
+        readings.setText("View readings");
+        readings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openLog(ReadingsActivity.class, ReadingsActivity.EXTRA_FILE); }
+        });
+        col.addView(readings, fullWidth(dp(8)));
+
+        Button map = new Button(this);
+        map.setText("Show on street map");
+        map.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openLog(MapActivity.class, MapActivity.EXTRA_FILE); }
+        });
+        col.addView(map, fullWidth(dp(8)));
+
         fileView = new TextView(this);
         fileView.setPadding(0, dp(8), 0, dp(16));
         col.addView(fileView);
@@ -178,7 +192,7 @@ public class MainActivity extends Activity {
         return Double.isNaN(v) ? "–" : String.format(Locale.US, "%.1f", v);
     }
 
-    private static int colorFor(String status) {
+    static int colorFor(String status) {
         if (JamDetector.NORMAL.equals(status)) return Color.rgb(46, 125, 50);
         if (JamDetector.BLOCKAGE.equals(status)) return Color.rgb(158, 118, 0);
         if (JamDetector.INTERFERENCE.equals(status)) return Color.rgb(230, 81, 0);
@@ -236,6 +250,12 @@ public class MainActivity extends Activity {
         File best = null;
         if (files != null) for (File f : files) if (best == null || f.lastModified() > best.lastModified()) best = f;
         return best;
+    }
+
+    private void openLog(Class<?> screen, String extra) {
+        File f = currentLog();
+        if (f == null) return;
+        startActivity(new Intent(this, screen).putExtra(extra, f.getAbsolutePath()));
     }
 
     private void saveToDownloads() {

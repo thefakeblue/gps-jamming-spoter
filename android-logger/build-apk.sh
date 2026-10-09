@@ -12,10 +12,14 @@ SRC=app/src/main
 OUT=build
 rm -rf "$OUT" && mkdir -p "$OUT/classes"
 
+# The in-app street map is the website's map page, bundled into the app.
+mkdir -p "$SRC/assets"
+if [ -f ../index.html ]; then cp ../index.html "$SRC/assets/map.html"; fi
+
 echo "1/5 Linking manifest"
-"$BT/aapt2" link -o "$OUT/unsigned.apk" -I "$ANDROID_JAR" \
+"$BT/aapt2" link -o "$OUT/unsigned.apk" -I "$ANDROID_JAR" -A "$SRC/assets" \
   --manifest "$SRC/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34 \
-  --version-code 2 --version-name 1.1
+  --version-code 3 --version-name 1.2
 
 echo "2/5 Compiling Java"
 javac -nowarn -Xlint:-options -source 8 -target 8 -encoding UTF-8 \

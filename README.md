@@ -19,6 +19,14 @@ Two pieces:
    (It's unknown because it was built here and not published on the Play Store.)
 4. Open **GPS Jam Logger**, tap **Start logging**, and allow *precise* location and notifications.
 
+## Look at your data inside the app
+
+- **View readings**: a summary of the log, every satellite heard in the latest second (bar = signal
+  strength, ✓ = used for your position), and a second-by-second list with the verdict, signal, satellite
+  count and AGC. It refreshes by itself while you're recording.
+- **Show on street map**: the same map as the website, with streets, opened right in the app with your
+  log already loaded (needs internet for the streets). Use **Choose log** to pick an older recording.
+
 ## Collect data
 
 - Start outdoors with a clear sky for a minute so the app learns what "normal" is for your phone.
