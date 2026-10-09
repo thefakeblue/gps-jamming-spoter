@@ -105,6 +105,13 @@ public class MainActivity extends Activity {
         });
         col.addView(readings, fullWidth(dp(8)));
 
+        Button json = new Button(this);
+        json.setText("Raw data (JSON)");
+        json.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { openLog(JsonActivity.class, JsonActivity.EXTRA_FILE); }
+        });
+        col.addView(json, fullWidth(dp(8)));
+
         Button map = new Button(this);
         map.setText("Show on street map");
         map.setOnClickListener(new View.OnClickListener() {

@@ -16,14 +16,14 @@ public class LogReader {
     public static class Sat {
         public String cons, band;
         public int svid;
-        public double cn0, elev, agc = Double.NaN;
+        public double cn0, elev, azim, agc = Double.NaN;
         public boolean used;
     }
 
     public static class Epoch {
         public long t;
         public String time = "";
-        public double lat = Double.NaN, lon = Double.NaN, acc = Double.NaN;
+        public double lat = Double.NaN, lon = Double.NaN, acc = Double.NaN, alt = Double.NaN;
         public String src = "";
         public String status = "";
         public double top4 = Double.NaN;
@@ -68,6 +68,7 @@ public class LogReader {
                     cur.lat = num(get(c, idx, "lat"));
                     cur.lon = num(get(c, idx, "lon"));
                     cur.acc = num(get(c, idx, "acc_m"));
+                    cur.alt = num(get(c, idx, "alt_m"));
                     cur.src = get(c, idx, "loc_source");
                     cur.status = get(c, idx, "epoch_status");
                     cur.top4 = num(get(c, idx, "epoch_top4_cn0"));
@@ -84,6 +85,7 @@ public class LogReader {
                     try { sat.svid = Integer.parseInt(get(c, idx, "svid")); } catch (NumberFormatException e) { sat.svid = 0; }
                     sat.cn0 = num(get(c, idx, "cn0_dbhz"));
                     sat.elev = num(get(c, idx, "elev_deg"));
+                    sat.azim = num(get(c, idx, "azim_deg"));
                     sat.agc = agc;
                     sat.used = "1".equals(get(c, idx, "used_in_fix"));
                     cur.satList.add(sat);

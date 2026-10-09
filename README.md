@@ -24,6 +24,9 @@ Two pieces:
 - **View readings**: a summary of the log, every satellite heard in the latest second (bar = signal
   strength, ✓ = used for your position), and a second-by-second list with the verdict, signal, satellite
   count and AGC. It refreshes by itself while you're recording.
+- **Raw data (JSON)**: the newest readings as JSON, one block per satellite per second, using the same
+  field names as the GPSI app (Latitude, Longitude, Altitude, Device, Constellation, Vehicle,
+  SignalToNoise, SatCount, TimeStamp) plus Band, AGC, Elevation, Azimuth, UsedInFix and Status. Copy button included.
 - **Show on street map**: the same map as the website, with streets, opened right in the app with your
   log already loaded (needs internet for the streets). Use **Choose log** to pick an older recording.
 
