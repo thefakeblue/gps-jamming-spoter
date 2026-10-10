@@ -45,6 +45,21 @@ Open the map link above (or `index.html`) in any browser, including on your phon
 click **Open log file…** and choose the CSV. Click **Try demo data** to see what a jammer looks like.
 You can load several logs at once. Use the Sensitivity sliders if it flags too much or too little.
 
+## Airplane GPS check (no equipment needed)
+
+Airplanes broadcast (ADS-B) how sure they are of their own GPS position. When many planes in one
+area report poor GPS at once, something there is usually jamming it. The map shows this as squares:
+green (fine), yellow (some trouble), red (jamming likely), grey (too few planes to tell).
+
+- **New Mexico, last 24 h**: shown when the map opens. A GitHub Action (`.github/workflows/adsb.yml`)
+  grabs free data from adsb.lol (backups: airplanes.live, adsb.fi) around Albuquerque every ~10 minutes
+  and saves a summary on the `adsb-data` branch. GitHub may pause scheduled runs if the repo has
+  no activity for 60 days; re-enable it under the Actions tab.
+- **Live check here**: checks planes around wherever the map is centred, right now. This works in the
+  Android app's map. Most web browsers block it on the website because the free services don't allow
+  web pages to read them directly.
+- Data is free for personal, non-commercial use: adsb.lol (ODbL), airplanes.live, adsb.fi.
+
 ## How jamming is told apart from blockage
 
 - **Jamming**: every satellite gets weaker at the same time *and* the AGC drops (the receiver turns

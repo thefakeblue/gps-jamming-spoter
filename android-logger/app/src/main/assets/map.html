@@ -54,6 +54,8 @@ details summary { cursor: pointer; color: var(--muted); }
 .leaflet-popup-content { font: 13px/1.4 system-ui, sans-serif; }
 .leaflet-popup-content table { border-collapse: collapse; }
 .leaflet-popup-content td { padding: 1px 6px 1px 0; }
+.adsb-legend .sq { width: 14px; height: 14px; border-radius: 3px; display: inline-block; flex: none; border: 1px solid rgba(0,0,0,.25); }
+label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
 .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; white-space: nowrap; }
 @media (max-width: 800px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 60vh 150px auto; height: auto; }
@@ -78,6 +80,17 @@ details summary { cursor: pointer; color: var(--muted); }
     </div>
     <p id="loaded" class="muted" style="margin-top:8px"></p>
     <p id="apkLink"><a href="GpsJamLogger.apk" style="color:var(--accent)">Get the Android logger app (APK)</a></p>
+
+    <h2>Airplane GPS check (ADS-B)</h2>
+    <p class="muted">Airplanes broadcast how sure they are of their own GPS position. When lots of planes in one area report poor GPS, something there is usually jamming it. This uses free public airplane data, so you don't need any equipment.</p>
+    <div class="row">
+      <button id="adsbNm">New Mexico, last 24 h</button>
+      <button id="adsbLive">Live check here</button>
+    </div>
+    <label class="check"><input type="checkbox" id="adsbCells" checked> Show squares (share of planes with poor GPS)</label>
+    <label class="check"><input type="checkbox" id="adsbPlanes" checked> Show planes</label>
+    <p id="adsbStatus" class="muted" style="margin-top:6px">Loading…</p>
+    <div class="legend adsb-legend" id="adsbLegend"></div>
 
     <h2>Colour points by</h2>
     <select id="colorMode">
@@ -117,6 +130,7 @@ details summary { cursor: pointer; color: var(--muted); }
       <p><b>No signal</b>: no satellites and no AGC evidence either way.</p>
       <p><b>Unusual</b>: 6+ satellites all very strong and nearly identical (a spoofing hint, not proof).</p>
       <p>Seconds without a GPS position get the phone's Wi-Fi/cell position, or are placed along the route between the known positions before and after (hollow markers).</p>
+      <p><b>Airplane squares</b>: a plane counts as "poor GPS" when it reports position accuracy worse than about 93 m (NACp under 8) or a low integrity number (NIC under 7), or when it stopped sending GPS positions. Squares are 0.5° (about 50 km). Green: under 2% of planes poor. Yellow: 2–10%. Red: over 10%, which usually means jamming. Grey: fewer than 3 planes, too few to tell. A square needs at least 2 poor planes to turn yellow or red, because a single plane (often a small helicopter) can report poor GPS all the time without any jamming. Planes on the ground and older transponders are ignored because they often report poor accuracy for harmless reasons.</p>
     </details>
   </aside>
   <div id="map"></div>
@@ -148,7 +162,7 @@ details summary { cursor: pointer; color: var(--muted); }
   // ---------------------------------------------------------------- state
   var epochs = [];       // sorted by time
   var files = [];
-  var map = L.map("map", { preferCanvas: true }).setView([20, 0], 2);
+  var map = L.map("map", { preferCanvas: true }).setView([34.4, -106.1], 6);  // New Mexico
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
   }).addTo(map);
@@ -535,6 +549,153 @@ details summary { cursor: pointer; color: var(--muted); }
     if (e.lat != null) map.panTo([e.lat, e.lon]);
   });
   window.addEventListener("resize", drawChart);
+
+  // ---------------------------------------------------------------- airplanes (ADS-B)
+  // Planes report how good their GPS is (NACp = accuracy, NIC = integrity).
+  // Rules must match quality() in tools/adsb_fetch.py.
+  var ADSB_DATA = "https://raw.githubusercontent.com/thefakeblue/gps-jamming-spoter/adsb-data/";
+  var ADSB_LIVE = [
+    ["airplanes.live", "https://api.airplanes.live/v2/point/{lat}/{lon}/{r}"],
+    ["adsb.lol", "https://api.adsb.lol/v2/point/{lat}/{lon}/{r}"],
+    ["adsb.fi", "https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{r}"]
+  ];
+  map.createPane("adsb").style.zIndex = 350;   // under the log's points
+  var adsbRenderer = L.canvas({ pane: "adsb" });
+  var adsbCellLayer = L.layerGroup().addTo(map);
+  var adsbPlaneLayer = L.layerGroup().addTo(map);
+  map.attributionControl.addAttribution("Aircraft: <a href='https://adsb.lol'>adsb.lol</a> (ODbL), <a href='https://airplanes.live'>airplanes.live</a>, <a href='https://adsb.fi'>adsb.fi</a>");
+  var Q_LABEL = { good: "Good GPS", poor: "Poor GPS accuracy", lost: "Lost GPS recently" };
+  function qColor(q) { return css(q === "good" ? "--accent" : q === "poor" ? "--interference" : "--jamming"); }
+  function cellColor(c) {
+    if (c.planes < 3) return css("--nosignal");
+    if (c.bad < 2) return css("--normal");   // one odd plane (often a helicopter with no GPS hooked up) isn't jamming
+    var pct = 100 * c.bad / c.planes;
+    return css(pct > 10 ? "--jamming" : pct >= 2 ? "--blockage" : "--normal");
+  }
+
+  function planeQuality(a) {
+    if (a.alt_baro === "ground") return null;
+    if (a.type && a.type !== "adsb_icao" && a.type !== "adsr_icao") return null;
+    if (a.gpsOkBefore != null) return "lost";
+    if (a.nac_p == null || a.nic == null || !a.version) return null;
+    return a.nac_p < 8 || a.nic < 7 ? "poor" : "good";
+  }
+  function planePos(a) {
+    if (a.gpsOkBefore != null && a.gpsOkLat != null) return [a.gpsOkLat, a.gpsOkLon];
+    if (a.lat != null) return [a.lat, a.lon];
+    if (a.lastPosition && a.lastPosition.lat != null) return [a.lastPosition.lat, a.lastPosition.lon];
+    return null;
+  }
+  // Turn a provider's raw reply into the same shape as latest.json / grid.json.
+  function fromRaw(list, size) {
+    var planes = [], cells = {};
+    list.forEach(function (a) {
+      var q = planeQuality(a), p = planePos(a);
+      if (!q || !p) return;
+      planes.push({ hex: a.hex, flight: (a.flight || "").trim(), r: a.r, t: a.t, lat: p[0], lon: p[1], alt: a.alt_baro, nacp: a.nac_p, nic: a.nic, q: q });
+      var la = Math.floor(p[0] / size) * size, lo = Math.floor(p[1] / size) * size, k = la + "," + lo;
+      var c = cells[k] || (cells[k] = { lat: la, lon: lo, size: size, planes: 0, bad: 0 });
+      c.planes++; if (q !== "good") c.bad++;
+    });
+    return { planes: planes, cells: Object.keys(cells).map(function (k) { return cells[k]; }) };
+  }
+
+  function drawAdsb(planes, cells) {
+    adsbCellLayer.clearLayers(); adsbPlaneLayer.clearLayers();
+    cells.forEach(function (c) {
+      var col = cellColor(c), few = c.planes < 3;
+      L.rectangle([[c.lat, c.lon], [c.lat + c.size, c.lon + c.size]], {
+        renderer: adsbRenderer, pane: "adsb", color: col, weight: 1, opacity: few ? .4 : .7, fillColor: col, fillOpacity: few ? .05 : .3
+      }).bindPopup("<b>" + c.bad + " of " + c.planes + " planes</b> had poor GPS here (" + Math.round(100 * c.bad / c.planes) + "%)" +
+        (few ? "<br>Too few planes to judge." : "")).addTo(adsbCellLayer);
+    });
+    planes.filter(function (p) { return p.q === "good"; }).concat(planes.filter(function (p) { return p.q !== "good"; })).forEach(function (p) {
+      var col = qColor(p.q);
+      L.circleMarker([p.lat, p.lon], { renderer: adsbRenderer, pane: "adsb", radius: p.q === "good" ? 3 : 5, color: col, weight: 1, fillColor: col, fillOpacity: .9 })
+        .bindPopup("<b>" + (p.flight || p.r || p.hex) + "</b>" + (p.t ? " (" + p.t + ")" : "") + "<br>" + Q_LABEL[p.q] +
+          (p.q === "lost" ? "<br>Dot shows where its GPS was last fine." : "") +
+          "<br>Accuracy (NACp): " + (p.nacp == null ? "–" : p.nacp) + " · Integrity (NIC): " + (p.nic == null ? "–" : p.nic) +
+          "<br>Altitude: " + (p.alt == null ? "–" : p.alt + " ft") +
+          "<br><a target='_blank' rel='noopener' href='https://globe.adsb.lol/?icao=" + p.hex + "'>Track this plane</a>")
+        .addTo(adsbPlaneLayer);
+    });
+    showAdsbLayers();
+  }
+  function showAdsbLayers() {
+    [["adsbCells", adsbCellLayer], ["adsbPlanes", adsbPlaneLayer]].forEach(function (x) {
+      if (document.getElementById(x[0]).checked) map.addLayer(x[1]); else map.removeLayer(x[1]);
+    });
+  }
+  function adsbSummary(planes) {
+    var bad = planes.filter(function (p) { return p.q !== "good"; }).length;
+    return planes.length + " planes right now, " + bad + " with poor or lost GPS";
+  }
+  function ago(sec) {
+    var m = Math.round((Date.now() / 1000 - sec) / 60);
+    return m < 1 ? "just now" : m < 90 ? m + " min ago" : Math.round(m / 60) + " h ago";
+  }
+  function renderAdsbLegend() {
+    document.getElementById("adsbLegend").innerHTML =
+      [["--normal", "Under 2% of planes with poor GPS"], ["--blockage", "2–10%: some trouble"], ["--jamming", "Over 10%: jamming likely"], ["--nosignal", "Too few planes to tell"]]
+        .map(function (x) { return "<div><span class='sq' style='background:" + css(x[0]) + "'></span>" + x[1] + "</div>"; }).join("") +
+      ["good", "poor", "lost"].map(function (q) { return "<div><span class='dot' style='background:" + qColor(q) + "'></span>Plane: " + Q_LABEL[q] + "</div>"; }).join("");
+  }
+
+  function loadAdsbNm(zoom) {
+    var st = document.getElementById("adsbStatus");
+    st.textContent = "Loading New Mexico airplane data…";
+    Promise.all(["grid.json", "latest.json"].map(function (f) {
+      return fetch(ADSB_DATA + f + "?t=" + Math.floor(Date.now() / 60000)).then(function (r) {
+        if (!r.ok) throw new Error("Airplane data isn't ready yet (" + r.status + "). It updates every 10 minutes.");
+        return r.json();
+      });
+    })).then(function (res) {
+      var grid = res[0], latest = res[1];
+      drawAdsb(latest.planes, grid.cells);
+      var poorCells = grid.cells.filter(function (c) { return c.planes >= 3 && c.bad >= 2 && c.bad / c.planes > 0.1; }).length;
+      st.textContent = "Within " + grid.radius_nm + " nm of Albuquerque. Squares: last " + grid.hours + " h, " +
+        (poorCells ? poorCells + " red square" + (poorCells > 1 ? "s" : "") : "no red squares") + ". " +
+        adsbSummary(latest.planes) + ". Updated " + ago(latest.time) + " from " + latest.source + ".";
+      if (zoom) map.fitBounds(L.latLngBounds(grid.cells.map(function (c) { return [c.lat + c.size / 2, c.lon + c.size / 2]; })).pad(0.05));
+    }).catch(function (e) { st.textContent = e.message; });
+  }
+
+  function loadAdsbLive() {
+    var st = document.getElementById("adsbStatus");
+    var c = map.getCenter(), b = map.getBounds();
+    var r = Math.min(250, Math.max(10, Math.round(c.distanceTo(b.getNorthEast()) / 1852)));
+    var lat = c.lat.toFixed(3), lon = c.wrap().lng.toFixed(3);
+    var urls = window.GPSJAM_APP_LOG != null
+      ? [["live", "__adsb/" + lat + "/" + lon + "/" + r]]   // inside the app: the app fetches it for us
+      : ADSB_LIVE.map(function (x) { return [x[0], x[1].replace("{lat}", lat).replace("{lon}", lon).replace("{r}", r)]; });
+    st.textContent = "Asking for planes within " + r + " nm of the map centre…";
+    var i = 0;
+    (function next(errors) {
+      if (i >= urls.length) {
+        st.textContent = "Live check didn't work from this browser (the free services don't allow websites to read them directly). " +
+          "Use the Android app's map for live checks anywhere, or the New Mexico button. Details: " + errors.join("; ");
+        return;
+      }
+      var u = urls[i++];
+      fetch(u[1], { cache: "no-store" }).then(function (resp) {
+        if (!resp.ok) throw new Error(resp.status);
+        return resp.json();
+      }).then(function (d) {
+        var list = d.ac || d.aircraft || [];
+        var out = fromRaw(list, r > 120 ? 0.5 : 0.25);
+        drawAdsb(out.planes, out.cells);
+        st.textContent = "Live, within " + r + " nm of the map centre: " + adsbSummary(out.planes) + ". Squares show this moment only" +
+          (u[0] === "live" ? "" : ", from " + u[0]) + ".";
+      }).catch(function (e) { errors.push(u[0] + ": " + (e.message || "blocked")); next(errors); });
+    })([]);
+  }
+
+  document.getElementById("adsbNm").addEventListener("click", function () { loadAdsbNm(true); });
+  document.getElementById("adsbLive").addEventListener("click", loadAdsbLive);
+  document.getElementById("adsbCells").addEventListener("change", showAdsbLayers);
+  document.getElementById("adsbPlanes").addEventListener("change", showAdsbLayers);
+  renderAdsbLegend();
+  loadAdsbNm(false);
 
   // ---------------------------------------------------------------- loading
   function loadTexts(list) {
