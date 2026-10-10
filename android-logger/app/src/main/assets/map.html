@@ -84,11 +84,11 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
     <h2>Airplane GPS check (ADS-B)</h2>
     <p class="muted">Airplanes broadcast how sure they are of their own GPS position. When lots of planes in one area report poor GPS, something there is usually jamming it. This uses free public airplane data, so you don't need any equipment.</p>
     <div class="row">
-      <button id="adsbNm">New Mexico, last 24 h</button>
+      <button id="adsbNm">Whole world, last 24 h</button>
       <button id="adsbLive">Live check here</button>
     </div>
     <label class="check"><input type="checkbox" id="adsbCells" checked> Show squares (share of planes with poor GPS)</label>
-    <label class="check"><input type="checkbox" id="adsbPlanes" checked> Show planes</label>
+    <label class="check"><input type="checkbox" id="adsbPlanes" checked> Show planes (zoom in to see the ones with good GPS)</label>
     <p id="adsbStatus" class="muted" style="margin-top:6px">Loading…</p>
     <div class="legend adsb-legend" id="adsbLegend"></div>
 
@@ -162,7 +162,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   // ---------------------------------------------------------------- state
   var epochs = [];       // sorted by time
   var files = [];
-  var map = L.map("map", { preferCanvas: true }).setView([34.4, -106.1], 6);  // New Mexico
+  var map = L.map("map", { preferCanvas: true, worldCopyJump: true }).setView([30, -20], 2);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
   }).addTo(map);
@@ -563,6 +563,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   var adsbRenderer = L.canvas({ pane: "adsb" });
   var adsbCellLayer = L.layerGroup().addTo(map);
   var adsbPlaneLayer = L.layerGroup().addTo(map);
+  var adsbGoodLayer = L.layerGroup();   // planes with good GPS: only shown when zoomed in, the world view would drown in dots
   map.attributionControl.addAttribution("Aircraft: <a href='https://adsb.lol'>adsb.lol</a> (ODbL), <a href='https://airplanes.live'>airplanes.live</a>, <a href='https://adsb.fi'>adsb.fi</a>");
   var Q_LABEL = { good: "Good GPS", poor: "Poor GPS accuracy", lost: "Lost GPS recently" };
   function qColor(q) { return css(q === "good" ? "--accent" : q === "poor" ? "--interference" : "--jamming"); }
@@ -601,7 +602,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   }
 
   function drawAdsb(planes, cells) {
-    adsbCellLayer.clearLayers(); adsbPlaneLayer.clearLayers();
+    adsbCellLayer.clearLayers(); adsbPlaneLayer.clearLayers(); adsbGoodLayer.clearLayers();
     cells.forEach(function (c) {
       var col = cellColor(c), few = c.planes < 3;
       L.rectangle([[c.lat, c.lon], [c.lat + c.size, c.lon + c.size]], {
@@ -617,7 +618,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
           "<br>Accuracy (NACp): " + (p.nacp == null ? "–" : p.nacp) + " · Integrity (NIC): " + (p.nic == null ? "–" : p.nic) +
           "<br>Altitude: " + (p.alt == null ? "–" : p.alt + " ft") +
           "<br><a target='_blank' rel='noopener' href='https://globe.adsb.lol/?icao=" + p.hex + "'>Track this plane</a>")
-        .addTo(adsbPlaneLayer);
+        .addTo(p.q === "good" ? adsbGoodLayer : adsbPlaneLayer);
     });
     showAdsbLayers();
   }
@@ -625,6 +626,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
     [["adsbCells", adsbCellLayer], ["adsbPlanes", adsbPlaneLayer]].forEach(function (x) {
       if (document.getElementById(x[0]).checked) map.addLayer(x[1]); else map.removeLayer(x[1]);
     });
+    if (document.getElementById("adsbPlanes").checked && map.getZoom() >= 5) map.addLayer(adsbGoodLayer); else map.removeLayer(adsbGoodLayer);
   }
   function adsbSummary(planes) {
     var bad = planes.filter(function (p) { return p.q !== "good"; }).length;
@@ -641,22 +643,29 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
       ["good", "poor", "lost"].map(function (q) { return "<div><span class='dot' style='background:" + qColor(q) + "'></span>Plane: " + Q_LABEL[q] + "</div>"; }).join("");
   }
 
+  // grid.json / latest.json store rows as arrays to stay small; turn them back into objects.
+  function rows(d, list) {
+    if (!d.fields) return list;
+    return list.map(function (r) { var o = {}; d.fields.forEach(function (k, i) { o[k] = r[i]; }); return o; });
+  }
   function loadAdsbNm(zoom) {
     var st = document.getElementById("adsbStatus");
-    st.textContent = "Loading New Mexico airplane data…";
+    st.textContent = "Loading worldwide airplane data (about 1 MB)…";
     Promise.all(["grid.json", "latest.json"].map(function (f) {
       return fetch(ADSB_DATA + f + "?t=" + Math.floor(Date.now() / 60000)).then(function (r) {
-        if (!r.ok) throw new Error("Airplane data isn't ready yet (" + r.status + "). It updates every 10 minutes.");
+        if (!r.ok) throw new Error("Airplane data isn't ready yet (" + r.status + "). It updates about every 30 minutes.");
         return r.json();
       });
     })).then(function (res) {
       var grid = res[0], latest = res[1];
-      drawAdsb(latest.planes, grid.cells);
-      var poorCells = grid.cells.filter(function (c) { return c.planes >= 3 && c.bad >= 2 && c.bad / c.planes > 0.1; }).length;
-      st.textContent = "Within " + grid.radius_nm + " nm of Albuquerque. Squares: last " + grid.hours + " h, " +
+      var cells = rows(grid, grid.cells), planes = rows(latest, latest.planes);
+      cells.forEach(function (c) { if (c.size == null) c.size = grid.size; });
+      drawAdsb(planes, cells);
+      var poorCells = cells.filter(function (c) { return c.planes >= 3 && c.bad >= 2 && c.bad / c.planes > 0.1; }).length;
+      st.textContent = (grid.area === "world" ? "Whole world" : "One area only") + ". Squares: last " + grid.hours + " h, " +
         (poorCells ? poorCells + " red square" + (poorCells > 1 ? "s" : "") : "no red squares") + ". " +
-        adsbSummary(latest.planes) + ". Updated " + ago(latest.time) + " from " + latest.source + ".";
-      if (zoom) map.fitBounds(L.latLngBounds(grid.cells.map(function (c) { return [c.lat + c.size / 2, c.lon + c.size / 2]; })).pad(0.05));
+        adsbSummary(planes) + ". Updated " + ago(latest.time) + " from " + latest.source + ".";
+      if (zoom) map.setView([30, -20], 2);
     }).catch(function (e) { st.textContent = e.message; });
   }
 
@@ -673,7 +682,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
     (function next(errors) {
       if (i >= urls.length) {
         st.textContent = "Live check didn't work from this browser (the free services don't allow websites to read them directly). " +
-          "Use the Android app's map for live checks anywhere, or the New Mexico button. Details: " + errors.join("; ");
+          "Use the Android app's map for live checks anywhere, or the whole-world button. Details: " + errors.join("; ");
         return;
       }
       var u = urls[i++];
@@ -694,6 +703,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
   document.getElementById("adsbLive").addEventListener("click", loadAdsbLive);
   document.getElementById("adsbCells").addEventListener("change", showAdsbLayers);
   document.getElementById("adsbPlanes").addEventListener("change", showAdsbLayers);
+  map.on("zoomend", showAdsbLayers);
   renderAdsbLegend();
   loadAdsbNm(false);
 

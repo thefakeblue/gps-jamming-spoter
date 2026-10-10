@@ -1,9 +1,9 @@
-# Every ~10 minutes, grab free airplane (ADS-B) data around New Mexico and save a
+# Every ~30 minutes, sweep free airplane (ADS-B) data over the whole world and save a
 # GPS-quality summary on the "adsb-data" branch. The map reads it from there.
 name: Airplane GPS data
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Get the last 24 hours of data

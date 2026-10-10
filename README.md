@@ -51,9 +51,10 @@ Airplanes broadcast (ADS-B) how sure they are of their own GPS position. When ma
 area report poor GPS at once, something there is usually jamming it. The map shows this as squares:
 green (fine), yellow (some trouble), red (jamming likely), grey (too few planes to tell).
 
-- **New Mexico, last 24 h**: shown when the map opens. A GitHub Action (`.github/workflows/adsb.yml`)
-  grabs free data from adsb.lol (backups: airplanes.live, adsb.fi) around Albuquerque every ~10 minutes
-  and saves a summary on the `adsb-data` branch. GitHub may pause scheduled runs if the repo has
+- **Whole world, last 24 h**: shown when the map opens. A GitHub Action (`.github/workflows/adsb.yml`)
+  sweeps free data from adsb.lol, airplanes.live and adsb.fi about every 30 minutes. The free services only
+  answer for 250 nm circles, so it asks for ~830 circles covering the world (each service at most once every
+  2 seconds; empty ocean circles only now and then) and saves a summary on the `adsb-data` branch. GitHub may pause scheduled runs if the repo has
   no activity for 60 days; re-enable it under the Actions tab.
 - **Live check here**: checks planes around wherever the map is centred, right now. This works in the
   Android app's map. Most web browsers block it on the website because the free services don't allow
