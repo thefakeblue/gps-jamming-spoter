@@ -1,0 +1,6 @@
+# Shell scripts must keep Unix line endings to run on Linux/macOS; Windows batch files want CRLF.
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.apk binary

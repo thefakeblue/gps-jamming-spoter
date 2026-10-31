@@ -156,6 +156,7 @@ public class JsonActivity extends Activity {
         o.put("UsedInFix", sat != null ? (Object) sat.used : JSONObject.NULL);
         o.put("SatCount", e.sats);
         o.put("Status", e.status);
+        o.put("Mode", e.mode);
         o.put("PositionSource", e.src);
         o.put("TimeStamp", stamp);
         return o;

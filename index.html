@@ -128,6 +128,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
       <p><b>Interference</b>: degraded C/N0 with an AGC drop, or, on phones without AGC, even the high-elevation satellites are badly weakened.</p>
       <p><b>Blockage</b>: C/N0 dropped but the AGC stayed put. Trees, roofs, buildings, tunnels.</p>
       <p><b>No signal</b>: no satellites and no AGC evidence either way.</p>
+      <p><b>No noise gauge</b>: phones on Android 6 ("basic mode", old satellite API), Android 7, and some newer phones don't report AGC. For those seconds the verdict rests on the signal drop alone, so they can show Interference but never Jamming. Their points have a dashed outline.</p>
       <p><b>Unusual</b>: 6+ satellites all very strong and nearly identical (a spoofing hint, not proof).</p>
       <p>Seconds without a GPS position get the phone's Wi-Fi/cell position, or are placed along the route between the known positions before and after (hollow markers).</p>
       <p><b>Airplane squares</b>: a plane counts as "poor GPS" when it reports position accuracy worse than about 93 m (NACp under 8) or a low integrity number (NIC under 7), or when it stopped sending GPS positions. Squares are 0.5° (about 50 km). Green: under 2% of planes poor. Yellow: 2–10%. Red: over 10%, which usually means jamming. Grey: fewer than 3 planes, too few to tell. A square needs at least 2 poor planes to turn yellow or red, because a single plane (often a small helicopter) can report poor GPS all the time without any jamming. Planes on the ground and older transponders are ignored because they often report poor accuracy for harmless reasons.</p>
@@ -141,10 +142,22 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
 (function () {
   "use strict";
 
+  // Very old browsers (like the built-in WebView on an Android 6 or 7 phone that never got
+  // Play Store updates) can't lay out or colour this page, so say what to do instead of breaking.
+  if (!(window.CSS && CSS.supports && CSS.supports("display", "grid") && CSS.supports("--x", "0"))) {
+    document.body.innerHTML = "<p style='padding:16px;font:16px/1.5 sans-serif'>This map needs a newer browser. " +
+      "On an Android phone, update <b>Android System WebView</b> (and Chrome) in the Play Store, then open the map again. " +
+      "Logging works without it.</p>";
+    return;
+  }
+
   var STATUS = ["NORMAL", "BLOCKAGE", "INTERFERENCE", "JAMMING", "NO_SIGNAL", "UNUSUAL"];
   var LABEL = { NORMAL: "Normal", BLOCKAGE: "Blockage (something in the way)", INTERFERENCE: "Interference",
     JAMMING: "Jamming likely", NO_SIGNAL: "No satellites", UNUSUAL: "Unusual (spoofing hint)" };
   var DEFAULTS = { base: 0, dropWarn: 6, dropJam: 10, agcWarn: 2, agcJam: 3 };
+  // gnss_mode column: how much the phone could tell in that second.
+  var MODE_LABEL = { full: "Full (with noise gauge)", no_agc: "No noise gauge on this phone: signal drop only",
+    basic: "Basic mode (Android 6), no noise gauge: signal drop only" };
 
   function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusColor(s) {
@@ -192,7 +205,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
         e = {
           t: t, lat: isNaN(lat) ? null : lat, lon: isNaN(lon) ? null : lon,
           acc: parseFloat(c[idx.acc_m]), src: c[idx.loc_source] || "",
-          sats: [], agcBy: {}, appStatus: c[idx.epoch_status] || ""
+          sats: [], agcBy: {}, appStatus: c[idx.epoch_status] || "", mode: c[idx.gnss_mode] || ""
         };
         byTime.set(t, e);
       }
@@ -211,6 +224,8 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
       var ref = ["GPS", "GALILEO", "GLONASS", "BEIDOU", "*"].filter(function (k) { return e.agcBy[k] != null; })[0];
       e.agc = ref ? e.agcBy[ref] : NaN;
       delete e.agcBy;
+      // Logs from before app v1.6 have no gnss_mode; those versions needed Android 7+, so no AGC means no_agc.
+      if (!e.mode) e.mode = isNaN(e.agc) ? "no_agc" : "full";
       var cn = e.sats.filter(function (s) { return s.cn0 > 0; }).map(function (s) { return s.cn0; })
         .sort(function (a, b) { return b - a; });
       e.nSats = cn.length;
@@ -343,6 +358,7 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
       "<tr><td>Top-4 C/N0</td><td colspan=2>" + n1(e.top4) + " dB-Hz</td></tr>" +
       "<tr><td>AGC</td><td colspan=2>" + n1(e.agc) + (isNaN(e.agc) ? "" : " dB") + "</td></tr>" +
       "<tr><td>Satellites</td><td colspan=2>" + e.nSats + "</td></tr>" +
+      "<tr><td>Mode</td><td colspan=2>" + (MODE_LABEL[e.mode] || e.mode) + "</td></tr>" +
       "<tr><td>Position</td><td colspan=2>" + (e.est ? "estimated (between fixes)" : (e.src || "–")) +
       (e.acc && !e.est ? ", ±" + Math.round(e.acc) + " m" : "") + "</td></tr>" + rows + "</table>";
   }
@@ -359,12 +375,14 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
     }
     // Draw calm points first so problem points sit on top.
     var order = { NORMAL: 0, UNUSUAL: 1, BLOCKAGE: 2, NO_SIGNAL: 3, INTERFERENCE: 4, JAMMING: 5 };
+    var ring = css("--text");
     located.slice().sort(function (a, b) { return order[a.status] - order[b.status]; }).forEach(function (e) {
       var col = mode === "status" ? statusColor(e.status) : cn0Color(e.top4);
       var bad = e.status === "JAMMING" || e.status === "INTERFERENCE";
+      var noGauge = e.mode !== "full";   // dashed outline: verdict from the signal drop only
       L.circleMarker([e.lat, e.lon], {
-        radius: bad ? 7 : 5, color: col, weight: e.est ? 2 : 1,
-        fillColor: col, fillOpacity: e.est ? 0.1 : 0.85
+        radius: bad ? 7 : 5, color: noGauge ? ring : col, weight: e.est || noGauge ? 2 : 1,
+        dashArray: noGauge ? "2 3" : null, fillColor: col, fillOpacity: e.est ? 0.1 : 0.85
       }).bindPopup(function () { return popupHtml(e); }).addTo(pointLayer);
     });
     events.forEach(function (ev, i) {
@@ -390,6 +408,9 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
         return "<div><span class='dot' style='background:" + cn0Color(v) + "'></span>" + (v === 20 ? "≤ 20" : v) + " dB-Hz</div>";
       }).join("");
     }
+    if (epochs.some(function (e) { return e.mode !== "full"; })) {
+      el.innerHTML += "<div><span class='dot' style='background:transparent;border:2px dashed var(--text)'></span>Dashed: no noise gauge (AGC), verdict from the signal drop only</div>";
+    }
   }
 
   function renderStats(info, locatedCount) {
@@ -400,13 +421,17 @@ label.check { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
     epochs.forEach(function (e) { counts[e.status]++; });
     var dur = (epochs[epochs.length - 1].t - epochs[0].t) / 60000;
     function pct(s) { return (100 * counts[s] / epochs.length).toFixed(1) + "%"; }
+    var noGauge = epochs.filter(function (e) { return e.mode !== "full"; }).length;
+    var basic = epochs.filter(function (e) { return e.mode === "basic"; }).length;
     el.innerHTML =
       "<div class='stat'><b>" + dur.toFixed(0) + " min</b>logged (" + epochs.length + " s)</div>" +
       "<div class='stat'><b>" + info.base.toFixed(1) + "</b>normal C/N0, dB-Hz</div>" +
       "<div class='stat' style='color:" + statusColor("JAMMING") + "'><b>" + pct("JAMMING") + "</b>jamming likely</div>" +
       "<div class='stat' style='color:" + statusColor("INTERFERENCE") + "'><b>" + pct("INTERFERENCE") + "</b>interference</div>" +
       "<div class='stat'><b>" + pct("BLOCKAGE") + "</b>blockage</div>" +
-      "<div class='stat'><b>" + (info.hasAgc ? "Yes" : "No") + "</b>AGC in log" + (info.hasAgc ? "" : " (less certain)") + "</div>";
+      "<div class='stat'><b>" + (info.hasAgc ? "Yes" : "No") + "</b>AGC in log" + (info.hasAgc ? "" : " (less certain)") + "</div>" +
+      (noGauge ? "<div class='stat'><b>" + (100 * noGauge / epochs.length).toFixed(1) + "%</b>" +
+        (basic ? "basic mode, " : "") + "no noise gauge: signal drop only</div>" : "");
     document.getElementById("loaded").textContent = files.join(", ") + " · " + locatedCount + " seconds with a position";
   }
 

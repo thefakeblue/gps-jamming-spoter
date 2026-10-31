@@ -28,15 +28,21 @@ public class LogReader {
         public String status = "";
         public double top4 = Double.NaN;
         public int sats;
-        public double agc = Double.NaN; // GPS L1 AGC when present (same reference the detector uses)
+        public double agc = Double.NaN; // L1 AGC, GPS first (same reference the detector and map use)
+        public String mode = "";        // gnss_mode: full / no_agc / basic
         public final List<Sat> satList = new ArrayList<>();
+        final Map<String, Double> agcL1 = new HashMap<>(); // constellation ("" = row without a satellite) -> L1 AGC
     }
+
+    // Constellations sit at different AGC levels, so use one steady reference, in this order.
+    private static final String[] AGC_ORDER = {"GPS", "GALILEO", "GLONASS", "BEIDOU", ""};
 
     public static class Summary {
         public File file;
         public int seconds;
         public long firstT, lastT;
         public final Map<String, Integer> statusCounts = new HashMap<>();
+        public final Map<String, Integer> modeCounts = new HashMap<>();
         public boolean hasAgc;
         public double minTop4 = Double.NaN, maxTop4 = Double.NaN;
         /** Newest seconds last; capped so huge logs stay quick to show. */
@@ -73,11 +79,12 @@ public class LogReader {
                     cur.status = get(c, idx, "epoch_status");
                     cur.top4 = num(get(c, idx, "epoch_top4_cn0"));
                     try { cur.sats = Integer.parseInt(get(c, idx, "epoch_sats")); } catch (NumberFormatException e) { cur.sats = 0; }
+                    cur.mode = get(c, idx, "gnss_mode");
                 }
                 String cons = get(c, idx, "constellation");
                 double agc = num(get(c, idx, "agc_db"));
                 String band = get(c, idx, "band");
-                if (!Double.isNaN(agc) && "GPS".equals(cons) && "L1".equals(band)) cur.agc = agc;
+                if (!Double.isNaN(agc) && (band.isEmpty() || "L1".equals(band))) cur.agcL1.put(cons, agc);
                 if (!cons.isEmpty()) {
                     Sat sat = new Sat();
                     sat.cons = cons;
@@ -89,8 +96,6 @@ public class LogReader {
                     sat.agc = agc;
                     sat.used = "1".equals(get(c, idx, "used_in_fix"));
                     cur.satList.add(sat);
-                } else if (!Double.isNaN(agc) && Double.isNaN(cur.agc)) {
-                    cur.agc = agc; // a second with no satellites still carries the AGC
                 }
             }
             if (cur != null) finish(s, cur, keepRecent);
@@ -101,16 +106,20 @@ public class LogReader {
     }
 
     private static void finish(Summary s, Epoch e, int keepRecent) {
-        if (Double.isNaN(e.agc)) {
-            // Fall back to any AGC this second if GPS L1 wasn't reported.
-            for (Sat sat : e.satList) if (!Double.isNaN(sat.agc)) { e.agc = sat.agc; break; }
+        for (String cons : AGC_ORDER) {
+            Double v = e.agcL1.get(cons);
+            if (v != null) { e.agc = v; break; }   // a second with no satellites still carries the AGC
         }
+        // Logs from before v1.6 have no gnss_mode; those versions needed Android 7+, so no AGC means no_agc.
+        if (e.mode.isEmpty()) e.mode = Double.isNaN(e.agc) ? LoggerService.MODE_NO_AGC : LoggerService.MODE_FULL;
         if (s.seconds == 0) s.firstT = e.t;
         s.lastT = e.t;
         s.seconds++;
         String st = e.status.isEmpty() ? "?" : e.status;
         Integer n = s.statusCounts.get(st);
         s.statusCounts.put(st, n == null ? 1 : n + 1);
+        Integer m = s.modeCounts.get(e.mode);
+        s.modeCounts.put(e.mode, m == null ? 1 : m + 1);
         if (!Double.isNaN(e.agc)) s.hasAgc = true;
         if (!Double.isNaN(e.top4)) {
             if (Double.isNaN(s.minTop4) || e.top4 < s.minTop4) s.minTop4 = e.top4;

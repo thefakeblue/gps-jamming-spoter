@@ -1,5 +1,7 @@
 package com.gpsjam.logger;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -11,6 +13,8 @@ import android.content.pm.ServiceInfo;
 import android.location.GnssMeasurement;
 import android.location.GnssMeasurementsEvent;
 import android.location.GnssStatus;
+import android.location.GpsSatellite;
+import android.location.GpsStatus;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -39,17 +43,29 @@ import java.util.Map;
 /**
  * Runs in the background (with a notification) and writes one CSV row per
  * satellite per second: position, C/N0, AGC, elevation, and the live verdict.
+ *
+ * Android 7+ reads satellites with GnssStatus and the AGC from raw GNSS measurements.
+ * Android 6 only has the old GpsStatus API: signal strength per satellite, no AGC
+ * ("basic mode"), so the verdict there rests on the signal drop alone.
  */
 public class LoggerService extends Service {
 
     public static final String ACTION_STOP = "com.gpsjam.logger.STOP";
     private static final String CHANNEL_ID = "logging";
     private static final int NOTIF_ID = 1;
+    // Most phones report satellites once a second, but some (and the emulator) report several
+    // times a second. The detector expects one epoch per second, so extra reports are skipped.
+    private static final long MIN_EPOCH_GAP_MS = 750;
 
     public static final String CSV_HEADER =
             "utc_ms,local_time,lat,lon,alt_m,acc_m,speed_mps,loc_source,loc_age_s,"
             + "constellation,svid,band,freq_mhz,cn0_dbhz,agc_db,elev_deg,azim_deg,used_in_fix,"
-            + "epoch_sats,epoch_top4_cn0,epoch_status";
+            + "epoch_sats,epoch_top4_cn0,epoch_status,gnss_mode";
+
+    // gnss_mode column: how much the phone could tell us in that second.
+    public static final String MODE_FULL = "full";     // AGC (noise gauge) available
+    public static final String MODE_NO_AGC = "no_agc"; // Android 7+, but the phone gave no AGC
+    public static final String MODE_BASIC = "basic";   // Android 6, old satellite API, never any AGC
 
     /** Live snapshot the screen reads. */
     public static class Snapshot {
@@ -61,8 +77,18 @@ public class LoggerService extends Service {
         public long epochs;
         public boolean agcSupported;
         public boolean measurementsSupported;
+        public long measurementEvents;  // raw-measurement batches received (0 = phone sends none)
+        public boolean basicMode;       // old GpsStatus API (Android 6)
+        public String gnssMode = "";    // gnss_mode of the latest second
         public File file;
         public String error;
+    }
+
+    /** One satellite in one second, from either GnssStatus (Android 7+) or GpsStatus (Android 6). */
+    static class SatReading {
+        int cons, svid;
+        float cn0, elev, azim, freqHz;
+        boolean used;
     }
 
     public interface Listener { void onUpdate(Snapshot s); }
@@ -86,6 +112,12 @@ public class LoggerService extends Service {
     private final Map<String, Double> agcByBand = new HashMap<>(); // "const:band" or "*:band" -> dB
     private long agcAt;
     private Snapshot snap = new Snapshot();
+
+    // Only one pair is used: GnssStatus callbacks on Android 7+, the old listener on Android 6.
+    private GnssStatus.Callback statusCallback;
+    private GnssMeasurementsEvent.Callback measCallback;
+    private GpsStatus.Listener oldStatusListener;
+    private GpsStatus oldStatus;
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -169,8 +201,34 @@ public class LoggerService extends Service {
                 lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000, 0, netListener, Looper.getMainLooper());
             } catch (Exception ignored) { }
         }
+        if (Build.VERSION.SDK_INT >= 24) startGnssCallbacks(); else startOldGpsStatus();
+    }
+
+    @TargetApi(24)
+    @SuppressWarnings("MissingPermission")
+    private void startGnssCallbacks() {
+        statusCallback = new GnssStatus.Callback() {
+            @Override public void onSatelliteStatusChanged(GnssStatus status) { writeEpoch(readSatellites(status)); }
+        };
+        measCallback = new GnssMeasurementsEvent.Callback() {
+            @Override public void onGnssMeasurementsReceived(GnssMeasurementsEvent event) { readAgc(event); }
+        };
         lm.registerGnssStatusCallback(statusCallback, handler);
         snap.measurementsSupported = lm.registerGnssMeasurementsCallback(measCallback, handler);
+    }
+
+    /** Android 6: the old API tells us when satellites change, then we ask for the list. */
+    @SuppressWarnings({"MissingPermission", "deprecation"})
+    private void startOldGpsStatus() {
+        snap.basicMode = true;
+        oldStatusListener = new GpsStatus.Listener() {
+            @Override public void onGpsStatusChanged(int event) {
+                if (event != GpsStatus.GPS_EVENT_SATELLITE_STATUS) return;
+                oldStatus = lm.getGpsStatus(oldStatus);
+                writeEpoch(readSatellites(oldStatus));
+            }
+        };
+        lm.addGpsStatusListener(oldStatusListener);
     }
 
     private final LocationListener gpsListener = new SimpleLocationListener() {
@@ -180,13 +238,40 @@ public class LoggerService extends Service {
         @Override public void onLocationChanged(Location l) { netLoc = l; netLocAt = SystemClock.elapsedRealtime(); }
     };
 
-    private final GnssStatus.Callback statusCallback = new GnssStatus.Callback() {
-        @Override public void onSatelliteStatusChanged(GnssStatus status) { writeEpoch(status); }
-    };
+    @TargetApi(24)
+    private static List<SatReading> readSatellites(GnssStatus status) {
+        List<SatReading> list = new ArrayList<>();
+        for (int i = 0; i < status.getSatelliteCount(); i++) {
+            SatReading s = new SatReading();
+            s.cons = status.getConstellationType(i);
+            s.svid = status.getSvid(i);
+            s.cn0 = status.getCn0DbHz(i);
+            s.elev = status.getElevationDegrees(i);
+            s.azim = status.getAzimuthDegrees(i);
+            s.used = status.usedInFix(i);
+            s.freqHz = (Build.VERSION.SDK_INT >= 26 && status.hasCarrierFrequencyHz(i)) ? status.getCarrierFrequencyHz(i) : 0f;
+            list.add(s);
+        }
+        return list;
+    }
 
-    private final GnssMeasurementsEvent.Callback measCallback = new GnssMeasurementsEvent.Callback() {
-        @Override public void onGnssMeasurementsReceived(GnssMeasurementsEvent event) { readAgc(event); }
-    };
+    /** The old API's "SNR" is really C/N0 in dB-Hz on nearly every phone, so it is logged as cn0. */
+    @SuppressWarnings("deprecation")
+    private static List<SatReading> readSatellites(GpsStatus status) {
+        List<SatReading> list = new ArrayList<>();
+        if (status == null) return list;
+        for (GpsSatellite g : status.getSatellites()) {
+            SatReading s = new SatReading();
+            s.cons = OldGpsPrn.constellation(g.getPrn());
+            s.svid = OldGpsPrn.svid(g.getPrn());
+            s.cn0 = g.getSnr();
+            s.elev = g.getElevation();
+            s.azim = g.getAzimuth();
+            s.used = g.usedInFix();
+            list.add(s);  // no carrier frequency: these phones are L1-only
+        }
+        return list;
+    }
 
     /** If satellites vanish completely some phones stop sending status; still log an empty second. */
     private final Runnable watchdog = new Runnable() {
@@ -197,7 +282,9 @@ public class LoggerService extends Service {
         }
     };
 
+    @TargetApi(24)
     private void readAgc(GnssMeasurementsEvent event) {
+        snap.measurementEvents++;
         agcBySat.clear();
         agcByBand.clear();
         // Android 7-12: AGC is reported on each measurement.
@@ -231,10 +318,13 @@ public class LoggerService extends Service {
         }
     }
 
-    private void writeEpoch(GnssStatus status) {
+    /** sats is null when the watchdog writes a second the phone sent nothing for. */
+    @SuppressLint("InlinedApi") // GnssStatus constants are copied in at compile time, fine on Android 6
+    private void writeEpoch(List<SatReading> sats) {
         if (out == null) return;
         long now = SystemClock.elapsedRealtime();
-        lastStatusAt = status != null ? now : lastStatusAt;
+        if (sats != null && lastStatusAt > 0 && now - lastStatusAt < MIN_EPOCH_GAP_MS) return;
+        lastStatusAt = sats != null ? now : lastStatusAt;
         long utc = System.currentTimeMillis();
         boolean agcFresh = now - agcAt < 3000;
 
@@ -245,31 +335,28 @@ public class LoggerService extends Service {
         else if (gpsLoc != null && now - gpsLocAt < 30000) { loc = gpsLoc; src = "gps_stale"; age = now - gpsLocAt; }
 
         // Gather satellites.
-        int n = status == null ? 0 : status.getSatelliteCount();
-        List<JamDetector.Sat> sats = new ArrayList<>();
+        int n = sats == null ? 0 : sats.size();
+        List<JamDetector.Sat> heard = new ArrayList<>();
         String[] rows = new String[n];
         for (int i = 0; i < n; i++) {
-            float cn0 = status.getCn0DbHz(i);
-            int cons = status.getConstellationType(i);
-            int svid = status.getSvid(i);
-            float freq = (Build.VERSION.SDK_INT >= 26 && status.hasCarrierFrequencyHz(i)) ? status.getCarrierFrequencyHz(i) : 0f;
-            String band = band(freq);
+            SatReading s = sats.get(i);
+            String band = band(s.freqHz);
             Double agc = null;
             if (agcFresh) {
-                agc = agcBySat.get(cons + ":" + svid + ":" + band);
-                if (agc == null) agc = agcByBand.get(cons + ":" + band);
+                agc = agcBySat.get(s.cons + ":" + s.svid + ":" + band);
+                if (agc == null) agc = agcByBand.get(s.cons + ":" + band);
                 if (agc == null) agc = agcByBand.get("*:" + band);
             }
-            if (cn0 > 0) {
-                sats.add(new JamDetector.Sat(cn0, status.getElevationDegrees(i)));
+            if (s.cn0 > 0) {
+                heard.add(new JamDetector.Sat(s.cn0, s.elev));
             }
-            rows[i] = constellationName(cons) + "," + svid + "," + band + ","
-                    + (freq > 0 ? String.format(Locale.US, "%.3f", freq / 1e6) : "") + ","
-                    + String.format(Locale.US, "%.1f", cn0) + ","
+            rows[i] = constellationName(s.cons) + "," + s.svid + "," + band + ","
+                    + (s.freqHz > 0 ? String.format(Locale.US, "%.3f", s.freqHz / 1e6) : "") + ","
+                    + String.format(Locale.US, "%.1f", s.cn0) + ","
                     + (agc != null ? String.format(Locale.US, "%.2f", agc) : "") + ","
-                    + String.format(Locale.US, "%.1f", status.getElevationDegrees(i)) + ","
-                    + String.format(Locale.US, "%.1f", status.getAzimuthDegrees(i)) + ","
-                    + (status.usedInFix(i) ? 1 : 0);
+                    + String.format(Locale.US, "%.1f", s.elev) + ","
+                    + String.format(Locale.US, "%.1f", s.azim) + ","
+                    + (s.used ? 1 : 0);
         }
         // Each constellation has its own AGC level (GPS and BeiDou differ by ~8 dB on some phones),
         // so averaging them jumps around as satellites come and go. Use one steady reference: GPS L1 first.
@@ -283,7 +370,8 @@ public class LoggerService extends Service {
             }
             if (Double.isNaN(epochAgc) && agcByBand.get("*:L1") != null) epochAgc = agcByBand.get("*:L1");
         }
-        JamDetector.Result r = detector.evaluate(sats, epochAgc);
+        JamDetector.Result r = detector.evaluate(heard, epochAgc);
+        String mode = snap.basicMode ? MODE_BASIC : (Double.isNaN(epochAgc) ? MODE_NO_AGC : MODE_FULL);
 
         String prefix = utc + "," + timeFmt.format(new Date(utc)) + ","
                 + (loc != null ? String.format(Locale.US, "%.7f,%.7f,%.1f,%.1f,%.2f",
@@ -291,7 +379,7 @@ public class LoggerService extends Service {
                     : ",,,,")
                 + "," + src + "," + (loc != null ? String.format(Locale.US, "%.1f", age / 1000.0) : "") + ",";
         String suffix = "," + r.sats + "," + (Double.isNaN(r.top4) ? "" : String.format(Locale.US, "%.1f", r.top4))
-                + "," + r.status + "\n";
+                + "," + r.status + "," + mode + "\n";
         try {
             if (n == 0) {
                 // One row with no satellite so the map still sees this second.
@@ -308,6 +396,7 @@ public class LoggerService extends Service {
         }
         snap.epochs++;
         snap.result = r;
+        snap.gnssMode = mode;
         snap.location = loc;
         snap.locSource = src;
         publish();
@@ -322,6 +411,7 @@ public class LoggerService extends Service {
         return "L5";
     }
 
+    @SuppressLint("InlinedApi")
     static String constellationName(int t) {
         switch (t) {
             case GnssStatus.CONSTELLATION_GPS: return "GPS";
@@ -340,6 +430,7 @@ public class LoggerService extends Service {
         s.running = snap.running; s.result = snap.result; s.location = snap.location;
         s.locSource = snap.locSource; s.rows = snap.rows; s.epochs = snap.epochs;
         s.agcSupported = snap.agcSupported; s.measurementsSupported = snap.measurementsSupported;
+        s.measurementEvents = snap.measurementEvents; s.basicMode = snap.basicMode; s.gnssMode = snap.gnssMode;
         s.file = snap.file; s.error = snap.error;
         latest = s;
         Listener l = listener;
@@ -353,8 +444,7 @@ public class LoggerService extends Service {
         if (lm != null) {
             lm.removeUpdates(gpsListener);
             lm.removeUpdates(netListener);
-            lm.unregisterGnssStatusCallback(statusCallback);
-            lm.unregisterGnssMeasurementsCallback(measCallback);
+            stopSatelliteListeners();
         }
         try { if (out != null) out.close(); } catch (IOException ignored) { }
         out = null;
@@ -363,7 +453,17 @@ public class LoggerService extends Service {
         super.onDestroy();
     }
 
-    /** LocationListener with the old optional methods filled in (needed on Android 7-10). */
+    @SuppressWarnings("deprecation")
+    private void stopSatelliteListeners() {
+        if (Build.VERSION.SDK_INT >= 24) {
+            if (statusCallback != null) lm.unregisterGnssStatusCallback(statusCallback);
+            if (measCallback != null) lm.unregisterGnssMeasurementsCallback(measCallback);
+        } else if (oldStatusListener != null) {
+            lm.removeGpsStatusListener(oldStatusListener);
+        }
+    }
+
+    /** LocationListener with the old optional methods filled in (needed on Android 6-10). */
     abstract static class SimpleLocationListener implements LocationListener {
         @Override public void onStatusChanged(String p, int s, Bundle b) { }
         @Override public void onProviderEnabled(String p) { }

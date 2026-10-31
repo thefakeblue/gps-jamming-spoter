@@ -3,19 +3,61 @@ plugins {
 }
 
 android {
-    namespace 'com.gpsjam.logger'
-    compileSdk 34
+    namespace = 'com.gpsjam.logger'
+    compileSdk = 37
 
     defaultConfig {
-        applicationId 'com.gpsjam.logger'
-        minSdk 24
-        targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        applicationId = 'com.gpsjam.logger'
+        // Android 6.0. Below Android 7 the app runs in "basic mode" (old GpsStatus API, no AGC).
+        minSdk = 23
+        targetSdk = 34
+        versionCode = 7
+        versionName = '1.6'
     }
 
+    signingConfigs {
+        // One shared key so a new build installs over the app already on the phones.
+        // debug.keystore is never committed (see .gitignore); without it Android Studio's own key is used.
+        if (rootProject.file('debug.keystore').exists()) {
+            debug {
+                storeFile = rootProject.file('debug.keystore')
+                storePassword = 'android'
+                keyAlias = 'debug'
+                keyPassword = 'android'
+            }
+        }
+    }
+
+    // Java 8 is deprecated in current JDKs; the build tools still turn Java 11 into code Android 6 runs.
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    lint {
+        // A call that doesn't exist on minSdk fails the build instead of crashing old phones.
+        error.add('NewApi')
+        fatal.add('NewApi')
+        abortOnError = true
+        // The screens are built in code, in English only; this warning would flag every label.
+        disable.add('SetTextI18n')
+        // @RequiresApi needs AndroidX, which build-apk.sh can't download. Our @TargetApi methods
+        // are only called after a Build.VERSION.SDK_INT check, and the emulator tests cover Android 6.
+        disable.add('UseRequiresApi')
     }
 }
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
+// The in-app street map is the website's map page, bundled into the app (same as build-apk.sh).
+def copyMapPage = tasks.register('copyMapPage', Copy) {
+    from(rootProject.file('../index.html'))
+    into(file('src/main/assets'))
+    rename { 'map.html' }
+}
+tasks.named('preBuild') { dependsOn(copyMapPage) }
+
+// Lint normally runs only for release builds; run it on every debug build too, so NewApi is checked.
+tasks.matching { it.name == 'assembleDebug' }.configureEach { dependsOn('lintDebug') }

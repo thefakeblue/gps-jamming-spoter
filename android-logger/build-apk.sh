@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Builds GpsJamLogger.apk without Android Studio, using Debian/Ubuntu packages:
+# Builds GpsJamLogger.apk without Android Studio or Gradle (the normal build is ./gradlew assembleDebug).
+# Keep the version and SDK numbers below the same as app/build.gradle.
+# Uses Debian/Ubuntu packages:
 #   sudo apt-get install -y openjdk-17-jdk aapt apksigner zipalign dalvik-exchange
 # and an android.jar (API 30) downloaded next to this script:
 #   curl -L -o android-30.jar https://raw.githubusercontent.com/Sable/android-platforms/master/android-30/android.jar
@@ -17,16 +19,18 @@ mkdir -p "$SRC/assets"
 if [ -f ../index.html ]; then cp ../index.html "$SRC/assets/map.html"; fi
 
 echo "1/5 Linking manifest"
+# Gradle adds the package name from build.gradle's namespace; do the same here.
+sed 's|<manifest |<manifest package="com.gpsjam.logger" |' "$SRC/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
 "$BT/aapt2" link -o "$OUT/unsigned.apk" -I "$ANDROID_JAR" -A "$SRC/assets" \
-  --manifest "$SRC/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34 \
-  --version-code 6 --version-name 1.5
+  --manifest "$OUT/AndroidManifest.xml" --min-sdk-version 23 --target-sdk-version 34 \
+  --version-code 7 --version-name 1.6
 
 echo "2/5 Compiling Java"
 javac -nowarn -Xlint:-options -source 8 -target 8 -encoding UTF-8 \
   -bootclasspath "$ANDROID_JAR" -d "$OUT/classes" $(find "$SRC/java" -name '*.java')
 
 echo "3/5 Converting to Android bytecode (dex)"
-dalvik-exchange --dex --min-sdk-version=24 --output="$OUT/classes.dex" "$OUT/classes"
+dalvik-exchange --dex --min-sdk-version=23 --output="$OUT/classes.dex" "$OUT/classes"
 (cd "$OUT" && zip -q -j unsigned.apk classes.dex)
 
 echo "4/5 Aligning"

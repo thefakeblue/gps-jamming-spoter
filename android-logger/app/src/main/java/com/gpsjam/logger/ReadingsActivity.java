@@ -121,7 +121,12 @@ public class ReadingsActivity extends Activity {
         if (!Double.isNaN(s.minTop4)) {
             sum.append(String.format(Locale.US, "Signal (top-4 C/N0): %.1f to %.1f dB-Hz%n", s.minTop4, s.maxTop4));
         }
-        sum.append(s.hasAgc ? "AGC noise gauge: recorded\n" : "AGC noise gauge: not reported by this phone\n");
+        if (s.modeCounts.containsKey(LoggerService.MODE_BASIC)) {
+            sum.append("Basic mode (Android 6, old satellite API): no noise gauge, verdicts use the signal drop only\n");
+        } else {
+            sum.append(s.hasAgc ? "AGC noise gauge: recorded\n"
+                    : "AGC noise gauge: not reported by this phone, verdicts use the signal drop only\n");
+        }
         content.addView(text(sum.toString(), 14, false));
 
         LinearLayout chips = new LinearLayout(this);

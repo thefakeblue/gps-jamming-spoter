@@ -1,6 +1,15 @@
 build/
 *.jar
+!gradle-wrapper.jar
 .gradle/
+.idea/
+*.iml
+.kotlin/
 local.properties
 *.keystore
+*.jks
 *.idsig
+__pycache__/
+# GPS logs show where you've been: never commit them.
+*.csv
+android-logger/app/src/test/resources/private/
