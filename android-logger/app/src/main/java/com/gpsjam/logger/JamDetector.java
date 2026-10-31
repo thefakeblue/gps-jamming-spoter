@@ -15,7 +15,8 @@ import java.util.List;
  *  - Trees/buildings/indoors also lower C/N0, but the AGC stays about the same,
  *    and usually some satellites (often the ones high in the sky) stay strong.
  *
- * The same rules are used by the map page (jamming-map.html) so the two agree.
+ * The same rules are used by the map page (index.html, classify()) so the two agree.
+ * RulesInSyncTest checks that the numbers below match the ones in index.html.
  */
 public class JamDetector {
 
@@ -33,6 +34,10 @@ public class JamDetector {
     static final double DROP_JAM_DB = 10.0;        // C/N0 drop that counts as "badly degraded"
     static final double AGC_DROP_WARN_DB = 2.0;    // AGC drop that suggests extra RF power
     static final double AGC_DROP_JAM_DB = 3.0;
+    static final double HIGH_ELEV_DEG = 40;        // "high in the sky", for phones without AGC
+    static final int UNUSUAL_MIN_SATS = 6;         // spoofing hint: this many satellites...
+    static final double UNUSUAL_MIN_TOP4 = 48;     // ...all this strong...
+    static final double UNUSUAL_MAX_STD = 1.5;     // ...and this alike
     static final int HISTORY = 600;                // ~10 minutes of 1 Hz epochs
 
     /** One satellite in one epoch. */
@@ -103,7 +108,7 @@ public class JamDetector {
                 // No AGC on this phone: look at the satellites high in the sky.
                 // Blockage rarely hides them all; a jammer hurts them just as much.
                 double highSum = 0; int highN = 0;
-                for (Sat s : sats) if (s.cn0 > 0 && s.elev >= 40) { highSum += s.cn0; highN++; }
+                for (Sat s : sats) if (s.cn0 > 0 && s.elev >= HIGH_ELEV_DEG) { highSum += s.cn0; highN++; }
                 boolean highAlsoWeak = highN >= 2 && (r.baseline - highSum / highN) >= DROP_JAM_DB;
                 if (highAlsoWeak && drop >= DROP_JAM_DB) {
                     r.status = INTERFERENCE;
@@ -113,7 +118,7 @@ public class JamDetector {
                     r.reason = "C/N0 down " + fmt(drop) + " dB (no AGC on this phone)";
                 }
             }
-        } else if (r.sats >= 6 && r.top4 >= 48 && stdDev(cn0s) < 1.5) {
+        } else if (r.sats >= UNUSUAL_MIN_SATS && r.top4 >= UNUSUAL_MIN_TOP4 && stdDev(cn0s) < UNUSUAL_MAX_STD) {
             r.status = UNUSUAL;
             r.reason = "Very strong and very uniform signals (spoofing check)";
         }

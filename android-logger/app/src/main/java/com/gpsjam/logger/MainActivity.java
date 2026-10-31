@@ -31,7 +31,7 @@ public class MainActivity extends Activity {
     private static final int REQ_LOCATION = 1;
     private static final int REQ_NOTIF = 2;
 
-    private TextView statusView, reasonView, statsView, fileView;
+    private TextView statusView, reasonView, modeView, statsView, fileView;
     private Button startStop;
 
     @Override
@@ -70,6 +70,16 @@ public class MainActivity extends Activity {
         reasonView.setGravity(Gravity.CENTER);
         reasonView.setPadding(0, dp(6), 0, dp(12));
         col.addView(reasonView);
+
+        // Shown when the phone can't give the AGC "noise gauge", so verdicts rest on the signal drop alone.
+        modeView = new TextView(this);
+        modeView.setPadding(dp(12), dp(8), dp(12), dp(8));
+        modeView.setTextColor(Color.BLACK);
+        modeView.setBackgroundColor(Color.rgb(255, 224, 130));
+        modeView.setVisibility(View.GONE);
+        LinearLayout.LayoutParams mp = fullWidth(0);
+        mp.bottomMargin = dp(12);
+        col.addView(modeView, mp);
 
         statsView = new TextView(this);
         statsView.setTypeface(Typeface.MONOSPACE);
@@ -165,6 +175,7 @@ public class MainActivity extends Activity {
         statusView.setText(status);
         statusView.setBackgroundColor(colorFor(s.running && r != null ? r.status : ""));
         reasonView.setText(r != null && s.running ? r.reason : "");
+        renderMode(s);
 
         StringBuilder b = new StringBuilder();
         if (r != null) {
@@ -173,7 +184,7 @@ public class MainActivity extends Activity {
             b.append(String.format(Locale.US, "Normal for you   : %s dB-Hz%n", num(r.baseline)));
             b.append(String.format(Locale.US, "AGC (noise gauge): %s%n",
                     !Double.isNaN(r.agc) ? num(r.agc) + " dB (normal " + num(r.agcBaseline) + ")"
-                            : (s.agcSupported ? "waiting" : "not reported by this phone")));
+                            : (s.agcSupported ? "waiting" : s.basicMode ? "none in basic mode" : "not reported by this phone")));
         }
         Location l = s.location;
         if (l != null) {
@@ -185,14 +196,38 @@ public class MainActivity extends Activity {
         if (s.running || s.epochs > 0) {
             b.append(String.format(Locale.US, "Seconds logged   : %d  (%d rows)%n", s.epochs, s.rows));
         }
-        if (s.running && !s.measurementsSupported) {
-            b.append("\nThis phone doesn't share raw GNSS measurements, so AGC is unavailable.\n");
-        }
         if (s.error != null) b.append("\nError: ").append(s.error).append('\n');
         statsView.setText(b.toString());
 
         File f = s.file != null ? s.file : newestLog();
         fileView.setText(f != null ? "Log file: " + f.getName() : "No log yet.");
+    }
+
+    private void renderMode(LoggerService.Snapshot s) {
+        String title = null, why = null;
+        if (Build.VERSION.SDK_INT < 24) {
+            title = "Basic mode: no noise gauge";
+            why = "This phone runs Android " + Build.VERSION.RELEASE + ", older than Android 7, so the app uses the old "
+                    + "satellite API: signal strength only, no AGC.";
+        } else if (s.running && !s.agcSupported && s.epochs >= 10) {
+            // Give the phone a few seconds to send its first raw measurements before saying it has none.
+            title = "No noise gauge on this phone";
+            if (!s.measurementsSupported || s.measurementEvents == 0) {
+                why = "This phone doesn't share raw GNSS measurements, so there is no AGC.";
+            } else if (Build.VERSION.SDK_INT < 26) {
+                why = "Android 7 shares raw measurements but not the AGC (that came with Android 8).";
+            } else {
+                why = "This phone shares raw measurements but not the AGC. Developer options → "
+                        + "Force full GNSS measurements may help.";
+            }
+        }
+        if (title == null) {
+            modeView.setVisibility(View.GONE);
+            return;
+        }
+        modeView.setText(title.toUpperCase(Locale.US) + "\n" + why + " Verdicts come from the signal drop alone, "
+                + "so the app can warn of Interference but can't confirm Jamming.");
+        modeView.setVisibility(View.VISIBLE);
     }
 
     private static String num(double v) {

@@ -1,10 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.gpsjam.logger"
-    android:versionCode="4"
-    android:versionName="1.3">
-
-    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+<!-- Package name, version and SDK levels live in app/build.gradle (build-apk.sh passes the same values). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

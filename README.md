@@ -11,9 +11,11 @@ Two pieces:
 - **jamming-map.html**: open it in a browser on your computer, load the app's CSV, and it
   colours your route by verdict, lists suspected jamming spots, and graphs signal over time.
 
-## Install the app (Android 7 or newer)
+## Install the app (Android 6 or newer)
 
 1. Get `GpsJamLogger.apk` onto the phone (download it on the phone, or email/Drive it to yourself).
+   If the phone has version 1.5 or older, uninstall that first: version 1.6 is signed with a new key, and
+   Android won't install it over the old one. Uninstalling deletes the old logs, so save or share any you want first.
 2. Tap the file. Android asks to allow installs from that app (Chrome, Files, Gmail…): allow it.
 3. Play Protect may say the app is from an unknown developer. Tap **More details → Install anyway**.
    (It's unknown because it was built here and not published on the Play Store.)
@@ -68,16 +70,38 @@ green (fine), yellow (some trouble), red (jamming likely), grey (too few planes 
 - **Blockage** (trees, buildings, roofs): signals get weaker but AGC stays about the same, and
   satellites high overhead usually stay strong.
 - Not every phone reports AGC. Without it, the app falls back to "are even the high satellites weak?",
-  which is less certain.
+  which is less certain. It can then say Interference, but never Jamming. The app shows a yellow
+  "no noise gauge" note, and the map draws those seconds with a dashed outline.
+- **Android 6** phones run in **basic mode**: Android 6 only has the old satellite API, which gives signal strength
+  but no AGC. **Android 7.0/7.1** use the new API but still can't report AGC (that arrived in Android 8).
+  Newer phones may or may not report it; Developer options → *Force full GNSS measurements* sometimes helps.
 
 ## CSV columns
 
 `utc_ms, local_time, lat, lon, alt_m, acc_m, speed_mps, loc_source (gps / network / gps_stale), loc_age_s,
 constellation, svid, band, freq_mhz, cn0_dbhz, agc_db, elev_deg, azim_deg, used_in_fix,
-epoch_sats, epoch_top4_cn0, epoch_status`: one row per satellite per second. A second with no satellites
+epoch_sats, epoch_top4_cn0, epoch_status, gnss_mode`: one row per satellite per second. A second with no satellites
 still gets one row (blank satellite columns) so outages show up on the map.
+
+`gnss_mode` (added in app 1.6) says how much the phone could tell that second: `full` (AGC available),
+`no_agc` (Android 7+ but no AGC) or `basic` (Android 6, old satellite API). Older logs don't have it; the map
+treats their seconds without AGC as `no_agc`.
 
 ## Rebuilding the app
 
-- **Android Studio**: File → Open → the `android-logger` folder, then Run.
-- **Command line (Linux)**: see the top of `android-logger/build-apk.sh`, then run it.
+The app is a normal Gradle project in `android-logger/` (Gradle wrapper 9.8.2, Android Gradle Plugin 9.5,
+minSdk 23 = Android 6, no libraries).
+
+- **Android Studio**: File → Open → the `android-logger` folder, plug in a phone with USB debugging on (or pick
+  an emulator), then Run. Studio writes `local.properties` (where your Android SDK is) by itself; it is never committed.
+- **Command line (Windows)**, in `android-logger`: `gradlew.bat installDebug` builds and installs on the
+  connected phone; `gradlew.bat assembleDebug` only builds (`app/build/outputs/apk/debug/app-debug.apk`).
+  Every debug build also runs Android lint, and a call that doesn't exist on Android 6 fails the build (the `NewApi` check).
+- **Signing**: debug builds are signed with `android-logger/debug.keystore` (password `android`, alias `debug`) so
+  each new build installs over the app already on your phones. Keep that file safe and never commit it; it is in
+  `.gitignore`. Without it, Android Studio's own debug key is used and you'd have to uninstall first.
+- Each build copies `index.html` into the app as `app/src/main/assets/map.html` (the in-app street map).
+- **Tests**: `gradlew.bat test` runs the `JamDetector` tests (made-up skies: jamming, blockage, no AGC), checks that
+  `index.html` uses the same thresholds as `JamDetector.java`, and replays any real logs you put in
+  `android-logger/app/src/test/resources/private/` (git-ignored, because logs show where you've been).
+- **Command line (Linux, no Gradle)**: see the top of `android-logger/build-apk.sh`, then run it.
