@@ -1,7 +1,7 @@
 # GPS jamming spotter (Android logger + map)
 
 **Map:** https://thefakeblue.github.io/gps-jamming-spoter/  
-**App:** [GpsJamLogger.apk](GpsJamLogger.apk) (tap, then the download button)
+**App:** [📥 Download GpsJamLogger.apk](https://thefakeblue.github.io/gps-jamming-spoter/GpsJamLogger.apk) (open this page in Chrome on the phone and tap the link)
 
 Two pieces:
 
@@ -13,10 +13,14 @@ Two pieces:
 
 ## Install the app (Android 6 or newer)
 
-1. Get `GpsJamLogger.apk` onto the phone (download it on the phone, or email/Drive it to yourself).
+1. On the phone, open the [download link](https://thefakeblue.github.io/gps-jamming-spoter/GpsJamLogger.apk) in
+   Chrome. (Tapping the `GpsJamLogger.apk` file in GitHub's file list only shows GitHub's file viewer, not a download.)
+   If Chrome warns that the file might be harmful, tap **Download anyway**: it says that about every app that isn't
+   from the Play Store.
    If the phone has version 1.5 or older, uninstall that first: version 1.6 is signed with a new key, and
    Android won't install it over the old one. Uninstalling deletes the old logs, so save or share any you want first.
-2. Tap the file. Android asks to allow installs from that app (Chrome, Files, Gmail…): allow it.
+2. Tap **Open** when the download finishes (or find it in **Files → Downloads**). Android asks to allow installs
+   from Chrome (or Files): allow it, go back, and tap **Install**.
 3. Play Protect may say the app is from an unknown developer. Tap **More details → Install anyway**.
    (It's unknown because it was built here and not published on the Play Store.)
 4. Open **GPS Jam Logger**, tap **Start logging**, and allow *precise* location and notifications.
@@ -101,6 +105,9 @@ minSdk 23 = Android 6, no libraries).
   each new build installs over the app already on your phones. Keep that file safe and never commit it; it is in
   `.gitignore`. Without it, Android Studio's own debug key is used and you'd have to uninstall first.
 - Each build copies `index.html` into the app as `app/src/main/assets/map.html` (the in-app street map).
+- **Publishing a new version** for the download link: bump `versionCode`/`versionName` in `app/build.gradle`, build,
+  copy `android-logger/app/build/outputs/apk/debug/app-debug.apk` to `GpsJamLogger.apk` in the repo root, and merge
+  to `main`. GitHub Pages serves it at the download link a minute or two later.
 - **Tests**: `gradlew.bat test` runs the `JamDetector` tests (made-up skies: jamming, blockage, no AGC), checks that
   `index.html` uses the same thresholds as `JamDetector.java`, and replays any real logs you put in
   `android-logger/app/src/test/resources/private/` (git-ignored, because logs show where you've been).
